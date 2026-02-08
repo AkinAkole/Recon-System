@@ -1,5 +1,6 @@
-Plaintext
+plaintext
 streamlit
 pandas
 openpyxl
+
 plotly
