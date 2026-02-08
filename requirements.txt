@@ -2,5 +2,5 @@ plaintext
 streamlit
 pandas
 openpyxl
-
 plotly
+
