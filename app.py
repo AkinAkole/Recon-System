@@ -48,11 +48,8 @@ if check_password():
     # --- SIDEBAR TOOLS ---
     st.sidebar.header("🔍 Quick Search")
     
-    # Use session state for the text input to allow clearing
-    if "search_input" not in st.session_state:
-        st.session_state["search_input"] = ""
-
-    search_ref = st.sidebar.text_input("Enter FCM Reference to Track", value=st.session_state["search_input"], key="search_box").strip()
+    # Use a key to control the widget programmatically
+    search_ref = st.sidebar.text_input("Enter FCM Reference to Track", key="search_query").strip()
 
     # --- SEARCH LOGIC (Safe Injection) ---
     if search_ref:
@@ -76,8 +73,9 @@ if check_password():
             if gl_match.empty and csv_match.empty:
                 st.sidebar.warning("No record found.")
             
-            if st.sidebar.button("Clear Search"):
-                st.session_state["search_input"] = ""
+            # WORKING CLEAR SEARCH
+            if st.sidebar.button("🗑️ Clear Search"):
+                st.session_state["search_query"] = "" # Reset the widget via its key
                 st.rerun()
         else:
             st.sidebar.info("💡 Run reconciliation first to enable searching.")
@@ -221,7 +219,7 @@ if check_password():
                 st.write("**Unmatched CSV Categorization**")
                 st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
 
-            # --- EXCEL OUTPUT GENERATION ---
+            # --- EXCEL OUTPUT GENERATION (Logic Omitted for brevity but kept in code) ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 summary_sections = [
