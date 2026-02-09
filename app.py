@@ -31,7 +31,7 @@ def check_password():
                 st.error("🚫 Access Denied")
     return False
 
-# --- CALLBACK FOR CLEARING SEARCH ---
+# --- CALLBACK FOR CLEARING SEARCH (Safely resets the widget) ---
 def clear_search_callback():
     st.session_state["search_query"] = ""
 
@@ -52,35 +52,51 @@ if check_password():
     # --- SIDEBAR TOOLS ---
     st.sidebar.header("🔍 Quick Search")
     
-    # Text input with a key for persistence
+    # Text input with a key for persistence and reset capability
     search_ref = st.sidebar.text_input("Enter FCM Reference to Track", key="search_query").strip()
 
-    # --- SEARCH LOGIC ---
+    # --- SEARCH LOGIC (Enhanced Visuals - Does not affect main logic) ---
     if search_ref:
         if "gl_data" in st.session_state and "csv_data" in st.session_state:
             st.sidebar.markdown("---")
-            st.sidebar.subheader(f"Results for: {search_ref}")
+            st.sidebar.subheader(f"🔍 Tracking: {search_ref}")
             
-            # Search GL
+            # Search both datasets
             gl_match = st.session_state["gl_data"][st.session_state["gl_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
-            # Search CSV
             csv_match = st.session_state["csv_data"][st.session_state["csv_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
 
-            if not gl_match.empty:
-                st.sidebar.success("Found in GL")
-                st.sidebar.dataframe(gl_match, hide_index=True)
+            # Verdict Cards
+            if not gl_match.empty and not csv_match.empty:
+                gl_amt = gl_match['Deposit'].sum()
+                ni_amt = csv_match['remitted_amount'].sum()
+                diff = ni_amt - gl_amt
+                
+                if diff == 0:
+                    st.sidebar.success(f"✅ **Perfect Match**\n\nBalanced at ₦{gl_amt:,.2f}")
+                else:
+                    st.sidebar.warning(f"⚠️ **Variance Found**\n\nGL: ₦{gl_amt:,.2f}\n\nNIBSS: ₦{ni_amt:,.2f}\n\nDiff: ₦{diff:,.2f}")
             
-            if not csv_match.empty:
-                st.sidebar.success("Found in NIBSS")
-                st.sidebar.dataframe(csv_match, hide_index=True)
+            elif not gl_match.empty:
+                st.sidebar.info(f"📝 **In GL Only**\n\nAmount: ₦{gl_match['Deposit'].sum():,.2f}")
+            
+            elif not csv_match.empty:
+                st.sidebar.info(f"📝 **In NIBSS Only**\n\nAmount: ₦{csv_match['remitted_amount'].sum():,.2f}")
+            
+            else:
+                st.sidebar.error("❌ **No Record Found**")
 
-            if gl_match.empty and csv_match.empty:
-                st.sidebar.warning("No record found.")
+            # Mini Data Preview
+            if not gl_match.empty:
+                st.sidebar.write("**GL Details:**")
+                st.sidebar.dataframe(gl_match, hide_index=True)
+            if not csv_match.empty:
+                st.sidebar.write("**NIBSS Details:**")
+                st.sidebar.dataframe(csv_match, hide_index=True)
             
-            # Using on_click callback to avoid the SessionState API Exception
             st.sidebar.button("🗑️ Clear Search", on_click=clear_search_callback)
+            st.sidebar.markdown("---")
         else:
-            st.sidebar.info("💡 Run reconciliation first to enable searching.")
+            st.sidebar.info("💡 Run reconciliation first to search.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -105,7 +121,7 @@ if check_password():
         if gl_uploads and csv_uploads:
             run_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # --- DATA LOADING & PROCESSING ---
+            # --- DATA LOADING & PROCESSING (YOUR CORE ENGINE) ---
             all_gl, all_csv, csv_dict = [], [], {}
             for f in gl_uploads:
                 df = pd.read_excel(f)
@@ -133,7 +149,7 @@ if check_password():
                     csv_dict[f.name] = df
             df_csv_input = pd.concat(all_csv, ignore_index=True) if all_csv else pd.DataFrame()
 
-            # --- PRESERVE DATA ---
+            # --- PRESERVE DATA FOR SEARCHER ---
             st.session_state["gl_data"] = df_gl_input
             st.session_state["csv_data"] = df_csv_input
 
@@ -221,7 +237,7 @@ if check_password():
                 st.write("**Unmatched CSV Categorization**")
                 st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
 
-            # --- EXCEL OUTPUT ---
+            # --- EXCEL OUTPUT GENERATION (STAYING IDENTICAL) ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 summary_sections = [
