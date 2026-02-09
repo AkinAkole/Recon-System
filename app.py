@@ -31,9 +31,12 @@ def check_password():
                 st.error("🚫 Access Denied")
     return False
 
-# --- CALLBACK FOR CLEARING SEARCH (Safely resets the widget) ---
+# --- CALLBACKS ---
 def clear_search_callback():
     st.session_state["search_query"] = ""
+
+def set_search_callback(ref):
+    st.session_state["search_query"] = ref
 
 # Execution Gate
 if check_password():
@@ -52,40 +55,40 @@ if check_password():
     # --- SIDEBAR TOOLS ---
     st.sidebar.header("🔍 Quick Search")
     
-    # Text input with a key for persistence and reset capability
+    # Initialize history if not exists
+    if "search_history" not in st.session_state:
+        st.session_state["search_history"] = []
+
     search_ref = st.sidebar.text_input("Enter FCM Reference to Track", key="search_query").strip()
 
-    # --- SEARCH LOGIC (Enhanced Visuals - Does not affect main logic) ---
+    # --- SEARCH LOGIC & HISTORY ---
     if search_ref:
+        # Update History (Keep last 5 unique searches)
+        if search_ref not in st.session_state["search_history"]:
+            st.session_state["search_history"].insert(0, search_ref)
+            st.session_state["search_history"] = st.session_state["search_history"][:5]
+
         if "gl_data" in st.session_state and "csv_data" in st.session_state:
             st.sidebar.markdown("---")
             st.sidebar.subheader(f"🔍 Tracking: {search_ref}")
             
-            # Search both datasets
             gl_match = st.session_state["gl_data"][st.session_state["gl_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
             csv_match = st.session_state["csv_data"][st.session_state["csv_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
 
-            # Verdict Cards
             if not gl_match.empty and not csv_match.empty:
-                gl_amt = gl_match['Deposit'].sum()
-                ni_amt = csv_match['remitted_amount'].sum()
+                gl_amt, ni_amt = gl_match['Deposit'].sum(), csv_match['remitted_amount'].sum()
                 diff = ni_amt - gl_amt
-                
                 if diff == 0:
-                    st.sidebar.success(f"✅ **Perfect Match**\n\nBalanced at ₦{gl_amt:,.2f}")
+                    st.sidebar.success(f"✅ **Match Found**\n\nBalanced: ₦{gl_amt:,.2f}")
                 else:
-                    st.sidebar.warning(f"⚠️ **Variance Found**\n\nGL: ₦{gl_amt:,.2f}\n\nNIBSS: ₦{ni_amt:,.2f}\n\nDiff: ₦{diff:,.2f}")
-            
+                    st.sidebar.warning(f"⚠️ **Variance**\n\nDiff: ₦{diff:,.2f}")
             elif not gl_match.empty:
-                st.sidebar.info(f"📝 **In GL Only**\n\nAmount: ₦{gl_match['Deposit'].sum():,.2f}")
-            
+                st.sidebar.info(f"📝 **GL Only**: ₦{gl_match['Deposit'].sum():,.2f}")
             elif not csv_match.empty:
-                st.sidebar.info(f"📝 **In NIBSS Only**\n\nAmount: ₦{csv_match['remitted_amount'].sum():,.2f}")
-            
+                st.sidebar.info(f"📝 **NIBSS Only**: ₦{csv_match['remitted_amount'].sum():,.2f}")
             else:
                 st.sidebar.error("❌ **No Record Found**")
 
-            # Mini Data Preview
             if not gl_match.empty:
                 st.sidebar.write("**GL Details:**")
                 st.sidebar.dataframe(gl_match, hide_index=True)
@@ -94,19 +97,27 @@ if check_password():
                 st.sidebar.dataframe(csv_match, hide_index=True)
             
             st.sidebar.button("🗑️ Clear Search", on_click=clear_search_callback)
-            st.sidebar.markdown("---")
         else:
-            st.sidebar.info("💡 Run reconciliation first to search.")
+            st.sidebar.info("💡 Run reconciliation first.")
 
+    # Display History Buttons
+    if st.session_state["search_history"]:
+        st.sidebar.markdown("---")
+        st.sidebar.write("🕒 **Recent Searches**")
+        for hist_ref in st.session_state["search_history"]:
+            st.sidebar.button(hist_ref, key=f"hist_{hist_ref}", on_click=set_search_callback, args=(hist_ref,))
+
+    # --- FILE UPLOADERS ---
     col1, col2 = st.columns(2)
     with col1:
         gl_uploads = st.file_uploader("Upload GL Excel Files", type=['xlsx', 'xls'], accept_multiple_files=True)
     with col2:
         csv_uploads = st.file_uploader("Upload NIBSS CSV Files", type=['csv'], accept_multiple_files=True)
 
+    # --- HELPER FUNCTIONS ---
     def heavy_clean_file(uploaded_file):
         try:
-            uploaded_file.seek(0) # Reset pointer
+            uploaded_file.seek(0)
             content = uploaded_file.read()
             text = content.replace(b'\x00', b'').decode('utf-8', errors='ignore')
             if '\t' in text: text = text.replace(',', ';').replace('\t', ',')
@@ -117,11 +128,11 @@ if check_password():
         col_clean = col.astype(str).str.replace(r'[^-0-9.]', '', regex=True)
         return pd.to_numeric(col_clean, errors='coerce').fillna(0)
 
+    # --- CORE RECON ENGINE ---
     if st.button("🚀 Run Reconciliation"):
         if gl_uploads and csv_uploads:
             run_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # --- DATA LOADING & PROCESSING (YOUR CORE ENGINE) ---
             all_gl, all_csv, csv_dict = [], [], {}
             for f in gl_uploads:
                 df = pd.read_excel(f)
@@ -149,7 +160,6 @@ if check_password():
                     csv_dict[f.name] = df
             df_csv_input = pd.concat(all_csv, ignore_index=True) if all_csv else pd.DataFrame()
 
-            # --- PRESERVE DATA FOR SEARCHER ---
             st.session_state["gl_data"] = df_gl_input
             st.session_state["csv_data"] = df_csv_input
 
@@ -184,7 +194,6 @@ if check_password():
                 nibss_review.insert(b_idx+1, 'Kachasi_In_GL', nibss_review['unique_reference'].map(gl_match_map).fillna(0))
                 nibss_review.insert(b_idx+2, 'Settle_Variance', nibss_review['remitted_amount'] - nibss_review['Kachasi_In_GL'])
 
-            # --- CALCULATIONS ---
             matched_mask_gl = (gl_review['NIBSS_reference'] != "")
             total_matched_gl_dep = gl_review[matched_mask_gl]['Deposit'].sum()
             total_matched_gl_nibss = gl_review[matched_mask_gl]['NIBSS_remitted'].sum()
@@ -199,7 +208,6 @@ if check_password():
             unmatched_csv_customs = nibss_review[is_c]['remitted_amount'].sum() if not nibss_review.empty else 0
             unmatched_csv_others = nibss_review[~is_m & ~is_c]['remitted_amount'].sum() if not nibss_review.empty else 0
 
-            # --- BROWSER DASHBOARD ---
             st.markdown("---")
             st.subheader("📊 Executive Insights")
             
@@ -221,9 +229,7 @@ if check_password():
 
             st.markdown("### Detailed Reconciliation Breakdown")
             d1, d2, d3 = st.columns(3)
-            
-            def color_diff(val):
-                return 'color: red; font-weight: bold' if val != 0 else ''
+            def color_diff(val): return 'color: red; font-weight: bold' if val != 0 else ''
 
             with d1:
                 st.write("**Bridging (Excel to CSV)**")
@@ -237,7 +243,7 @@ if check_password():
                 st.write("**Unmatched CSV Categorization**")
                 st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
 
-            # --- EXCEL OUTPUT GENERATION (STAYING IDENTICAL) ---
+            # --- EXCEL REPORT GENERATION ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 summary_sections = [
@@ -247,21 +253,20 @@ if check_password():
                     ['Overall NIBSS Remittance', df_csv_input['remitted_amount'].sum()],
                     ['Net System Variance', gl_review['Variance'].sum()],
                     ['', ''],
-                    ['--- EXCEL TO CSV ANALYSIS (Bridging) ---', 'VALUE'],
+                    ['--- EXCEL TO CSV ANALYSIS ---', 'VALUE'],
                     ['Total Matched Excel Deposit', total_matched_gl_dep],
                     ['Total Matched NIBSS Remitted', total_matched_gl_nibss],
                     ['Difference (Matched Excel vs NIBSS)', bridging_diff],
-                    ['Total Unmatched Excel Deposit (Exceptions)', unmatched_gl_dep],
+                    ['Total Unmatched Excel Deposit', unmatched_gl_dep],
                     ['Matched Item Count', matched_mask_gl.sum()],
                     ['', ''],
-                    ['--- CSV TO EXCEL ANALYSIS (Categorized) ---', 'VALUE'],
+                    ['--- CSV TO EXCEL ANALYSIS ---', 'VALUE'],
                     ['Total Matched CSV Remittance', total_matched_gl_nibss],
                     ['Total Matched Kachasi Credit', total_matched_gl_dep],
                     ['Difference (Matched CSV vs Kachasi)', csv_vs_kachasi_diff],
                     ['', ''],
-                    ['Total Unmatched CSV - NIGERIA CUSTOM SERVICES', unmatched_csv_customs],
-                    ['Total Unmatched CSV - OTHER MDAs', unmatched_csv_others],
-                    ['Total Unmatched CSV Remittance', unmatched_csv_customs + unmatched_csv_others]
+                    ['Total Unmatched CSV - NCS', unmatched_csv_customs],
+                    ['Total Unmatched CSV - OTHERS', unmatched_csv_others]
                 ]
                 pd.DataFrame(summary_sections).to_excel(writer, sheet_name='Executive Summary', index=False, header=False)
                 ws_sum = writer.sheets['Executive Summary']
@@ -319,11 +324,7 @@ if check_password():
                 r_n = write_block(ws_nr, nibss_review[(~is_m) & (~is_c)], r_n, "OTHER UNMATCHED", nr_sums)
                 write_grand_total(ws_nr, nibss_review, r_n, "GRAND TOTAL (NIBSS_REVIEW)", nr_sums)
 
-                mda_configs = [
-                    ('NIGERIA CUSTOM SERVICES', 'Customs_Extract'), 
-                    ('FEDERAL MINISTRY OF FINANCE, BUDGET AND NATIONAL PLANNING - HQTRS', 'NESS_Extract'),
-                    ('OFFICE OF THE CHIEF SECURITY OFFICER TO THE PRESIDENT', 'CyberSec_Extract')
-                ]
+                mda_configs = [('NIGERIA CUSTOM SERVICES', 'Customs_Extract'), ('FEDERAL MINISTRY OF FINANCE, BUDGET AND NATIONAL PLANNING - HQTRS', 'NESS_Extract'), ('OFFICE OF THE CHIEF SECURITY OFFICER TO THE PRESIDENT', 'CyberSec_Extract')]
                 for mda_target, sname in mda_configs:
                     ws_ex = writer.book.create_sheet(sname)
                     ptr, pool = 0, []
@@ -338,14 +339,7 @@ if check_password():
                     if not pool:
                         zero_df = pd.DataFrame([["NO RECORDS FOUND", 0.00, 0.00, 0.00, mda_target]], columns=['unique_reference', 'remitted_amount', 'collected_amount', 'fee', 'mda_name'])
                         write_block(ws_ex, zero_df, 0, "ZERO EXTRACT", ['remitted_amount', 'collected_amount', 'fee'])
-                    else: 
-                        write_grand_total(ws_ex, pd.concat(pool), ptr, f"GRAND TOTAL ({sname})", ['remitted_amount', 'collected_amount', 'fee'])
-
-                ws_log = writer.book.create_sheet('Run_Log')
-                log_data = [['RECONCILIATION AUDIT LOG', ''], ['Processed At:', run_time], ['', ''], ['SOURCE FILES USED:', 'TYPE']]
-                for f in gl_uploads: log_data.append([f.name, 'EXCEL / GL'])
-                for f in csv_uploads: log_data.append([f.name, 'CSV / NIBSS'])
-                pd.DataFrame(log_data).to_excel(writer, sheet_name='Run_Log', index=False, header=False)
+                    else: write_grand_total(ws_ex, pd.concat(pool), ptr, f"GRAND TOTAL ({sname})", ['remitted_amount', 'collected_amount', 'fee'])
 
                 for sheet in writer.book.worksheets:
                     for col in sheet.columns: sheet.column_dimensions[col[0].column_letter].width = 28
