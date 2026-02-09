@@ -170,20 +170,48 @@ if check_password():
                 m2.metric("Overall NIBSS Remittance", f"₦{df_csv_input['remitted_amount'].sum():,.2f}")
                 m3.metric("Net System Variance", f"₦{gl_review['Variance'].sum():,.2f}")
 
-            st.markdown("### Detailed Reconciliation Breakdown")
-            d1, d2, d3 = st.columns(3)
-            with d1:
-                st.write("**Bridging (Excel to CSV)**")
-                df_bridge = pd.DataFrame({"Description": ["Matched GL Deposit", "Matched NIBSS Remitted", "Difference (Matched GL vs NIBSS)", "Unmatched GL Dep"], "Value": [total_matched_gl_dep, total_matched_gl_nibss, bridging_diff, unmatched_gl_dep]}).set_index("Description")
-                st.table(df_bridge.style.format("₦{:,.2f}"))
-            with d2:
-                st.write("**CSV to Excel Analysis**")
-                df_comp = pd.DataFrame({"Description": ["Total Matched CSV Remittance", "Total Matched Kachasi Credit", "Difference (CSV vs Kachasi)"], "Value": [total_matched_gl_nibss, total_matched_gl_dep, csv_vs_kachasi_diff]}).set_index("Description")
-                st.table(df_comp.style.format("₦{:,.2f}"))
-            with d3:
-                st.write("**Unmatched CSV Categorization**")
-                st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
+st.markdown("### Detailed Reconciliation Breakdown")
+        d1, d2, d3 = st.columns(3)
+        
+        # Helper function for conditional coloring
+        def color_diff(val):
+            color = 'red' if val != 0 else 'black'
+            weight = 'bold' if val != 0 else 'normal'
+            return f'color: {color}; font-weight: {weight}'
 
+        with d1:
+            st.write("**Bridging (Excel to CSV)**")
+            df_bridge = pd.DataFrame({
+                "Description": ["Matched GL Deposit", "Matched NIBSS Remitted", "Difference (Matched GL vs NIBSS)", "Unmatched GL Dep"], 
+                "Value": [total_matched_gl_dep, total_matched_gl_nibss, bridging_diff, unmatched_gl_dep]
+            }).set_index("Description")
+            
+            # Apply color specifically to the 'Difference' row
+            st.table(df_bridge.style.format("₦{:,.2f}").applymap(
+                color_diff, subset=pd.IndexSlice[['Difference (Matched GL vs NIBSS)'], :]
+            ))
+
+        with d2:
+            st.write("**CSV to Excel Analysis**")
+            df_comp = pd.DataFrame({
+                "Description": ["Total Matched CSV Remittance", "Total Matched Kachasi Credit", "Difference (CSV vs Kachasi)"], 
+                "Value": [total_matched_gl_nibss, total_matched_gl_dep, csv_vs_kachasi_diff]
+            }).set_index("Description")
+            
+            # Apply color specifically to the 'Difference' row
+            st.table(df_comp.style.format("₦{:,.2f}").applymap(
+                color_diff, subset=pd.IndexSlice[['Difference (CSV vs Kachasi)'], :]
+            ))
+
+        with d3:
+            st.write("**Unmatched CSV Categorization**")
+            df_unmatched = pd.DataFrame({
+                "Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], 
+                "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]
+            }).set_index("Description")
+            
+            st.table(df_unmatched.style.format("₦{:,.2f}"))
+            
             # --- EXCEL OUTPUT GENERATION ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -301,3 +329,4 @@ if check_password():
             st.download_button(label="📥 Download Executive Report", data=output.getvalue(), file_name="Executive_Recon_Report.xlsx")
         else:
             st.error("Please upload both GL and NIBSS files.")
+
