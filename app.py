@@ -31,6 +31,10 @@ def check_password():
                 st.error("🚫 Access Denied")
     return False
 
+# --- CALLBACK FOR CLEARING SEARCH ---
+def clear_search_callback():
+    st.session_state["search_query"] = ""
+
 # Execution Gate
 if check_password():
 
@@ -48,10 +52,10 @@ if check_password():
     # --- SIDEBAR TOOLS ---
     st.sidebar.header("🔍 Quick Search")
     
-    # Use a key to control the widget programmatically
+    # Text input with a key for persistence
     search_ref = st.sidebar.text_input("Enter FCM Reference to Track", key="search_query").strip()
 
-    # --- SEARCH LOGIC (Safe Injection) ---
+    # --- SEARCH LOGIC ---
     if search_ref:
         if "gl_data" in st.session_state and "csv_data" in st.session_state:
             st.sidebar.markdown("---")
@@ -73,10 +77,8 @@ if check_password():
             if gl_match.empty and csv_match.empty:
                 st.sidebar.warning("No record found.")
             
-            # WORKING CLEAR SEARCH
-            if st.sidebar.button("🗑️ Clear Search"):
-                st.session_state["search_query"] = "" # Reset the widget via its key
-                st.rerun()
+            # Using on_click callback to avoid the SessionState API Exception
+            st.sidebar.button("🗑️ Clear Search", on_click=clear_search_callback)
         else:
             st.sidebar.info("💡 Run reconciliation first to enable searching.")
 
@@ -131,7 +133,7 @@ if check_password():
                     csv_dict[f.name] = df
             df_csv_input = pd.concat(all_csv, ignore_index=True) if all_csv else pd.DataFrame()
 
-            # --- PRESERVE DATA FOR SEARCHER ---
+            # --- PRESERVE DATA ---
             st.session_state["gl_data"] = df_gl_input
             st.session_state["csv_data"] = df_csv_input
 
@@ -219,7 +221,7 @@ if check_password():
                 st.write("**Unmatched CSV Categorization**")
                 st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
 
-            # --- EXCEL OUTPUT GENERATION (Logic Omitted for brevity but kept in code) ---
+            # --- EXCEL OUTPUT ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 summary_sections = [
