@@ -47,27 +47,40 @@ if check_password():
 
     # --- SIDEBAR TOOLS ---
     st.sidebar.header("🔍 Quick Search")
-    search_ref = st.sidebar.text_input("Enter FCM Reference to Track")
+    
+    # Use session state for the text input to allow clearing
+    if "search_input" not in st.session_state:
+        st.session_state["search_input"] = ""
 
-    # --- SEARCH EXECUTION (Logic Added Here) ---
-    if search_ref and "gl_data" in st.session_state:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader(f"Results for: {search_ref}")
-        
-        # Search in GL
-        gl_res = st.session_state["gl_data"][st.session_state["gl_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
-        if not gl_res.empty:
-            st.sidebar.write("✅ Found in GL Data")
-            st.sidebar.dataframe(gl_res, hide_index=True)
-        
-        # Search in NIBSS
-        csv_res = st.session_state["csv_data"][st.session_state["csv_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
-        if not csv_res.empty:
-            st.sidebar.write("✅ Found in NIBSS Data")
-            st.sidebar.dataframe(csv_res, hide_index=True)
-        
-        if gl_res.empty and csv_res.empty:
-            st.sidebar.warning("No matches found.")
+    search_ref = st.sidebar.text_input("Enter FCM Reference to Track", value=st.session_state["search_input"], key="search_box").strip()
+
+    # --- SEARCH LOGIC (Safe Injection) ---
+    if search_ref:
+        if "gl_data" in st.session_state and "csv_data" in st.session_state:
+            st.sidebar.markdown("---")
+            st.sidebar.subheader(f"Results for: {search_ref}")
+            
+            # Search GL
+            gl_match = st.session_state["gl_data"][st.session_state["gl_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
+            # Search CSV
+            csv_match = st.session_state["csv_data"][st.session_state["csv_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
+
+            if not gl_match.empty:
+                st.sidebar.success("Found in GL")
+                st.sidebar.dataframe(gl_match, hide_index=True)
+            
+            if not csv_match.empty:
+                st.sidebar.success("Found in NIBSS")
+                st.sidebar.dataframe(csv_match, hide_index=True)
+
+            if gl_match.empty and csv_match.empty:
+                st.sidebar.warning("No record found.")
+            
+            if st.sidebar.button("Clear Search"):
+                st.session_state["search_input"] = ""
+                st.rerun()
+        else:
+            st.sidebar.info("💡 Run reconciliation first to enable searching.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -120,7 +133,7 @@ if check_password():
                     csv_dict[f.name] = df
             df_csv_input = pd.concat(all_csv, ignore_index=True) if all_csv else pd.DataFrame()
 
-            # Store in Session State for Searcher to access later
+            # --- PRESERVE DATA FOR SEARCHER ---
             st.session_state["gl_data"] = df_gl_input
             st.session_state["csv_data"] = df_csv_input
 
