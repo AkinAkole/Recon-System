@@ -49,6 +49,26 @@ if check_password():
     st.sidebar.header("🔍 Quick Search")
     search_ref = st.sidebar.text_input("Enter FCM Reference to Track")
 
+    # --- SEARCH EXECUTION (Logic Added Here) ---
+    if search_ref and "gl_data" in st.session_state:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader(f"Results for: {search_ref}")
+        
+        # Search in GL
+        gl_res = st.session_state["gl_data"][st.session_state["gl_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
+        if not gl_res.empty:
+            st.sidebar.write("✅ Found in GL Data")
+            st.sidebar.dataframe(gl_res, hide_index=True)
+        
+        # Search in NIBSS
+        csv_res = st.session_state["csv_data"][st.session_state["csv_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
+        if not csv_res.empty:
+            st.sidebar.write("✅ Found in NIBSS Data")
+            st.sidebar.dataframe(csv_res, hide_index=True)
+        
+        if gl_res.empty and csv_res.empty:
+            st.sidebar.warning("No matches found.")
+
     col1, col2 = st.columns(2)
     with col1:
         gl_uploads = st.file_uploader("Upload GL Excel Files", type=['xlsx', 'xls'], accept_multiple_files=True)
@@ -99,6 +119,10 @@ if check_password():
                     all_csv.append(df)
                     csv_dict[f.name] = df
             df_csv_input = pd.concat(all_csv, ignore_index=True) if all_csv else pd.DataFrame()
+
+            # Store in Session State for Searcher to access later
+            st.session_state["gl_data"] = df_gl_input
+            st.session_state["csv_data"] = df_csv_input
 
             gl_review = df_gl_input.copy() if not df_gl_input.empty else pd.DataFrame(columns=['Description', 'Deposit', 'Withdrawal', 'Reference'])
             
