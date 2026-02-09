@@ -1,5 +1,5 @@
 import streamlit as st
-import pd
+import pandas as pd  # <--- Fixed this line
 import os
 import re
 import io
@@ -360,3 +360,4 @@ if check_password():
             st.download_button(label="📥 Download Executive Report", data=output.getvalue(), file_name="Executive_Recon_Report.xlsx")
         else:
             st.error("Please upload both GL and NIBSS files.")
+
