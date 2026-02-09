@@ -1,3 +1,4 @@
+import streamlit as st
 import pandas as pd
 import os
 import re
@@ -23,7 +24,6 @@ def check_password():
         st.title("Secure Access")
         user_pwd = st.text_input("Institutional Password", type="password")
         if st.button("Unlock System"):
-            # FIX: Ensure we check the secret correctly without crashing
             if "INSTITUTIONAL_PASSWORD" in st.secrets and user_pwd == st.secrets["INSTITUTIONAL_PASSWORD"]: 
                 st.session_state["password_correct"] = True
                 st.rerun()
@@ -31,7 +31,7 @@ def check_password():
                 st.error("🚫 Access Denied")
     return False
 
-# This is the "Gate": If not logged in, the rest of the code doesn't execute
+# Execution Gate
 if check_password():
 
     # --- STYLING CONSTANTS ---
@@ -57,8 +57,7 @@ if check_password():
 
     def heavy_clean_file(uploaded_file):
         try:
-            # FIX: reset pointer so the file can be read even if Streamlit peaked at it
-            uploaded_file.seek(0)
+            uploaded_file.seek(0) # Reset pointer
             content = uploaded_file.read()
             text = content.replace(b'\x00', b'').decode('utf-8', errors='ignore')
             if '\t' in text: text = text.replace(',', ';').replace('\t', ',')
@@ -103,7 +102,6 @@ if check_password():
 
             gl_review = df_gl_input.copy() if not df_gl_input.empty else pd.DataFrame(columns=['Description', 'Deposit', 'Withdrawal', 'Reference'])
             
-            # GL_Reference logic
             if 'Reference' in gl_review.columns:
                 gl_review['GL_Reference'] = gl_review['Reference'].astype(str).replace('nan', '')
             else:
@@ -142,9 +140,8 @@ if check_password():
             csv_vs_kachasi_diff = total_matched_gl_nibss - total_matched_gl_dep
             
             is_m = (nibss_review['Kachasi_ref'] != "") if 'Kachasi_ref' in nibss_review.columns else pd.Series([False]*len(nibss_review))
-            # FIX: Ensure mda_name exists before checking
-            mda_col = nibss_review['mda_name'] if 'mda_name' in nibss_review.columns else pd.Series([""]*len(nibss_review))
-            is_c = ((nibss_review['Kachasi_ref'] == "") & (mda_col == 'NIGERIA CUSTOM SERVICES') & (nibss_review['unique_reference'].str.startswith('F', na=False)))
+            mda_check_col = nibss_review['mda_name'] if 'mda_name' in nibss_review.columns else pd.Series([""]*len(nibss_review))
+            is_c = ((nibss_review['Kachasi_ref'] == "") & (mda_check_col == 'NIGERIA CUSTOM SERVICES') & (nibss_review['unique_reference'].str.startswith('F', na=False)))
             
             unmatched_csv_customs = nibss_review[is_c]['remitted_amount'].sum() if not nibss_review.empty else 0
             unmatched_csv_others = nibss_review[~is_m & ~is_c]['remitted_amount'].sum() if not nibss_review.empty else 0
@@ -171,14 +168,18 @@ if check_password():
 
             st.markdown("### Detailed Reconciliation Breakdown")
             d1, d2, d3 = st.columns(3)
+            
+            def color_diff(val):
+                return 'color: red; font-weight: bold' if val != 0 else ''
+
             with d1:
                 st.write("**Bridging (Excel to CSV)**")
                 df_bridge = pd.DataFrame({"Description": ["Matched GL Deposit", "Matched NIBSS Remitted", "Difference (Matched GL vs NIBSS)", "Unmatched GL Dep"], "Value": [total_matched_gl_dep, total_matched_gl_nibss, bridging_diff, unmatched_gl_dep]}).set_index("Description")
-                st.table(df_bridge.style.format("₦{:,.2f}"))
+                st.table(df_bridge.style.format("₦{:,.2f}").applymap(color_diff, subset=pd.IndexSlice[['Difference (Matched GL vs NIBSS)'], :]))
             with d2:
                 st.write("**CSV to Excel Analysis**")
                 df_comp = pd.DataFrame({"Description": ["Total Matched CSV Remittance", "Total Matched Kachasi Credit", "Difference (CSV vs Kachasi)"], "Value": [total_matched_gl_nibss, total_matched_gl_dep, csv_vs_kachasi_diff]}).set_index("Description")
-                st.table(df_comp.style.format("₦{:,.2f}"))
+                st.table(df_comp.style.format("₦{:,.2f}").applymap(color_diff, subset=pd.IndexSlice[['Difference (CSV vs Kachasi)'], :]))
             with d3:
                 st.write("**Unmatched CSV Categorization**")
                 st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
@@ -186,7 +187,6 @@ if check_password():
             # --- EXCEL OUTPUT GENERATION ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # Summary logic
                 summary_sections = [
                     ['EXECUTIVE RECONCILIATION DASHBOARD', ''],
                     ['Run Timestamp', run_time],
