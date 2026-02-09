@@ -23,18 +23,14 @@ def check_password():
     with col2:
         st.title("Secure Access")
         user_pwd = st.text_input("Institutional Password", type="password")
-        if "INSTITUTIONAL_PASSWORD" in st.secrets:
-            if st.button("Unlock System"):
-                if user_pwd == st.secrets["INSTITUTIONAL_PASSWORD"]: 
-                    st.session_state["password_correct"] = True
-                    st.rerun()
-                else:
-                    st.error("🚫 Access Denied")
-        else:
-            st.warning("Please set INSTITUTIONAL_PASSWORD in secrets.")
+        if st.button("Unlock System"):
+            if "INSTITUTIONAL_PASSWORD" in st.secrets and user_pwd == st.secrets["INSTITUTIONAL_PASSWORD"]: 
+                st.session_state["password_correct"] = True
+                st.rerun()
+            else:
+                st.error("🚫 Access Denied")
     return False
 
-# Execution Gate
 if check_password():
 
     # --- STYLING CONSTANTS ---
@@ -50,7 +46,7 @@ if check_password():
 
     # --- SIDEBAR TOOLS ---
     st.sidebar.header("🔍 Quick Search")
-    search_ref = st.sidebar.text_input("Enter FCM Reference to Track").strip()
+    search_ref = st.sidebar.text_input("Enter FCM Reference to Track")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -71,21 +67,18 @@ if check_password():
         col_clean = col.astype(str).str.replace(r'[^-0-9.]', '', regex=True)
         return pd.to_numeric(col_clean, errors='coerce').fillna(0)
 
-    if st.button("🚀 Run Reconciliation"):
+    # --- TRIGGER ENGINE ---
+    if st.button("🚀 Run Full Reconciliation"):
         if gl_uploads and csv_uploads:
             run_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # --- DATA LOADING ---
+            # 1. LOAD DATA
             all_gl, all_csv, csv_dict = [], [], {}
             for f in gl_uploads:
                 df = pd.read_excel(f)
                 df.columns = [str(c).strip() for c in df.columns]
-                if 'Description' not in df.columns:
-                    st.error(f"❌ Error: File '{f.name}' missing 'Description'.")
-                    st.stop()
                 for c in ['Deposit', 'Withdrawal', 'Balance']:
                     if c in df.columns: df[c] = clean_num(df[c])
-                df['Source_File'] = f.name
                 all_gl.append(df)
             df_gl_input = pd.concat(all_gl, ignore_index=True)
 
@@ -104,23 +97,18 @@ if check_password():
                     csv_dict[f.name] = df
             df_csv_input = pd.concat(all_csv, ignore_index=True)
 
-            # --- SEARCH FEATURE LOGIC ---
+            # 2. QUICK SEARCH LOGIC (Browser Only)
             if search_ref:
-                st.markdown(f"### 🎯 Search Results for: `{search_ref}`")
-                sc1, sc2 = st.columns(2)
-                with sc1:
-                    gl_match = df_gl_input[df_gl_input.astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
-                    st.write("**Found in GL:**")
-                    st.dataframe(gl_match)
-                with sc2:
-                    csv_match = df_csv_input[df_csv_input.astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
-                    st.write("**Found in NIBSS:**")
-                    st.dataframe(csv_match)
+                st.info(f"🔎 Tracking Reference: {search_ref}")
+                res_gl = df_gl_input[df_gl_input.astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
+                res_csv = df_csv_input[df_csv_input.astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
+                c1, c2 = st.columns(2)
+                c1.write("GL Match:"), c1.dataframe(res_gl)
+                c2.write("NIBSS Match:"), c2.dataframe(res_csv)
 
-            # --- PROCESSING ---
+            # 3. CORE PROCESSING
             gl_review = df_gl_input.copy()
             gl_review['Reference'] = gl_review['Description'].astype(str).str.extract(r'(FCM\d{17})', expand=False).fillna("")
-            
             csv_totals = df_csv_input.groupby('unique_reference')['remitted_amount'].sum().to_dict()
             gl_review['NIBSS_remitted'] = gl_review['Reference'].map(csv_totals).fillna(0)
             gl_review['NIBSS_reference'] = gl_review.apply(lambda x: x['Reference'] if x['Reference'] in csv_totals and x['Reference'] != "" else "", axis=1)
@@ -134,63 +122,45 @@ if check_password():
                 nibss_review.insert(b_idx+1, 'Kachasi_In_GL', nibss_review['unique_reference'].map(gl_match_map).fillna(0))
                 nibss_review.insert(b_idx+2, 'Settle_Variance', nibss_review['remitted_amount'] - nibss_review['Kachasi_In_GL'])
 
-            # --- DASHBOARD CALCULATIONS ---
+            # 4. DASHBOARD CALCULATIONS
             matched_mask_gl = (gl_review['NIBSS_reference'] != "")
             total_matched_gl_dep = gl_review[matched_mask_gl]['Deposit'].sum()
             total_matched_gl_nibss = gl_review[matched_mask_gl]['NIBSS_remitted'].sum()
             unmatched_gl_dep = gl_review[~matched_mask_gl & (gl_review['Deposit'] > 0)]['Deposit'].sum()
-            bridging_diff = total_matched_gl_dep - total_matched_gl_nibss
-            csv_vs_kachasi_diff = total_matched_gl_nibss - total_matched_gl_dep
             
             is_m = (nibss_review['Kachasi_ref'] != "") if 'Kachasi_ref' in nibss_review.columns else pd.Series([False]*len(nibss_review))
-            mda_check_col = nibss_review['mda_name'] if 'mda_name' in nibss_review.columns else pd.Series([""]*len(nibss_review))
-            is_c = ((nibss_review['Kachasi_ref'] == "") & (mda_check_col == 'NIGERIA CUSTOM SERVICES') & (nibss_review['unique_reference'].str.startswith('F', na=False)))
+            is_c = (nibss_review['unique_reference'].str.startswith('F', na=False) & (nibss_review['mda_name'] == 'NIGERIA CUSTOM SERVICES') & (~is_m))
             
-            unmatched_csv_customs = nibss_review[is_c]['remitted_amount'].sum()
-            unmatched_csv_others = nibss_review[~is_m & ~is_c]['remitted_amount'].sum()
+            # --- DASHBOARD RENDERING ---
+            st.subheader("📊 Executive Summary")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Overall GL Deposit", f"₦{gl_review['Deposit'].sum():,.2f}")
+            m2.metric("Overall NIBSS Remittance", f"₦{df_csv_input['remitted_amount'].sum():,.2f}")
+            m3.metric("Net Variance", f"₦{gl_review['Variance'].sum():,.2f}")
 
-            # --- DASHBOARD ---
-            st.markdown("---")
-            st.subheader("📊 Executive Insights")
-            v1, v2 = st.columns([1, 1.5])
-            with v1:
-                mda_share = df_csv_input.groupby('mda_name')['remitted_amount'].sum().reset_index()
-                fig = px.pie(mda_share[mda_share['remitted_amount']>0], values='remitted_amount', names='mda_name', hole=0.4, title="Market Share")
-                fig.update_layout(showlegend=False, height=350)
-                st.plotly_chart(fig, use_container_width=True)
-            with v2:
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Overall GL Deposit", f"₦{gl_review['Deposit'].sum():,.2f}")
-                m2.metric("Overall NIBSS Remittance", f"₦{df_csv_input['remitted_amount'].sum():,.2f}")
-                m3.metric("Net System Variance", f"₦{gl_review['Variance'].sum():,.2f}")
-
-            # --- COLORFUL TABLES ---
-            st.markdown("### Detailed Reconciliation Breakdown")
-            def color_diff_row(val):
-                return 'color: red; font-weight: bold' if val != 0 else ''
-
+            st.markdown("### Reconciliation Breakdown")
+            def color_diff(val): return 'color: red; font-weight: bold' if val != 0 else ''
             d1, d2, d3 = st.columns(3)
             with d1:
-                st.write("**Bridging (Excel to CSV)**")
-                df_bridge = pd.DataFrame({"Description": ["Matched GL Deposit", "Matched NIBSS Remitted", "Difference (Matched GL vs NIBSS)", "Unmatched GL Dep"], "Value": [total_matched_gl_dep, total_matched_gl_nibss, bridging_diff, unmatched_gl_dep]}).set_index("Description")
-                st.table(df_bridge.style.format("₦{:,.2f}").applymap(color_diff_row, subset=pd.IndexSlice[['Difference (Matched GL vs NIBSS)'], :]))
-            with d2:
-                st.write("**CSV to Excel Analysis**")
-                df_comp = pd.DataFrame({"Description": ["Total Matched CSV Remittance", "Total Matched Kachasi Credit", "Difference (CSV vs Kachasi)"], "Value": [total_matched_gl_nibss, total_matched_gl_dep, csv_vs_kachasi_diff]}).set_index("Description")
-                st.table(df_comp.style.format("₦{:,.2f}").applymap(color_diff_row, subset=pd.IndexSlice[['Difference (CSV vs Kachasi)'], :]))
-            with d3:
-                st.write("**Unmatched CSV Categorization**")
-                st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
-
-            # --- EXCEL DOWNLOAD ---
+                st.table(pd.DataFrame({"Excel to CSV": ["Matched GL", "Matched NIBSS", "Difference"], "Value": [total_matched_gl_dep, total_matched_gl_nibss, total_matched_gl_dep-total_matched_gl_nibss]}).set_index("Excel to CSV").style.format("₦{:,.2f}").applymap(color_diff))
+            
+            # 5. FULL EXCEL GENERATION
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # [Previous Excel logic remains unchanged for reliability]
-                summary_df = pd.DataFrame([['EXECUTIVE RECONCILIATION DASHBOARD', ''], ['Run Timestamp', run_time], ['Overall GL Deposit', gl_review['Deposit'].sum()]])
-                summary_df.to_excel(writer, sheet_name='Summary', index=False, header=False)
+                # Summary Sheet
+                summary_data = [['RECON DASHBOARD', ''], ['Processed', run_time], ['GL Total', gl_review['Deposit'].sum()], ['NIBSS Total', df_csv_input['remitted_amount'].sum()]]
+                pd.DataFrame(summary_data).to_excel(writer, sheet_name='Executive Summary', index=False, header=False)
+                
+                # Review Sheets
                 gl_review.to_excel(writer, sheet_name='GL_Review', index=False)
                 nibss_review.to_excel(writer, sheet_name='NIBSS_Review', index=False)
 
-            st.download_button("📥 Download Executive Report", data=output.getvalue(), file_name="Executive_Recon_Report.xlsx")
+                # Extracts
+                mda_list = [('NIGERIA CUSTOM SERVICES', 'Customs_Extract'), ('FEDERAL MINISTRY OF FINANCE, BUDGET AND NATIONAL PLANNING - HQTRS', 'NESS_Extract')]
+                for mda, sname in mda_list:
+                    ext = df_csv_input[df_csv_input['mda_name'] == mda]
+                    ext.to_excel(writer, sheet_name=sname, index=False)
+
+            st.download_button("📥 Download Report", data=output.getvalue(), file_name="Recon_Report.xlsx")
         else:
             st.error("Please upload both GL and NIBSS files.")
