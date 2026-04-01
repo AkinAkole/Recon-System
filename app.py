@@ -1,5 +1,5 @@
 import streamlit as st
-import pandas as pd  # <--- Fixed this line
+import pandas as pd
 import os
 import re
 import io
@@ -64,7 +64,6 @@ if check_password():
 
     # --- SEARCH LOGIC & HISTORY UPDATE ---
     if search_ref:
-        # Update history logic (keep last 5 unique)
         if search_ref not in st.session_state["search_history"]:
             st.session_state["search_history"].insert(0, search_ref)
             st.session_state["search_history"] = st.session_state["search_history"][:5]
@@ -236,11 +235,15 @@ if check_password():
             with d1:
                 st.write("**Bridging (Excel to CSV)**")
                 df_bridge = pd.DataFrame({"Description": ["Matched GL Deposit", "Matched NIBSS Remitted", "Difference (Matched GL vs NIBSS)", "Unmatched GL Dep"], "Value": [total_matched_gl_dep, total_matched_gl_nibss, bridging_diff, unmatched_gl_dep]}).set_index("Description")
-                st.table(df_bridge.style.format("₦{:,.2f}").applymap(color_diff, subset=pd.IndexSlice[['Difference (Matched GL vs NIBSS)'], :]))
+                # FIXED: .applymap replaced with .map
+                st.table(df_bridge.style.format("₦{:,.2f}").map(color_diff, subset=['Value']))
+            
             with d2:
                 st.write("**CSV to Excel Analysis**")
                 df_comp = pd.DataFrame({"Description": ["Total Matched CSV Remittance", "Total Matched Kachasi Credit", "Difference (CSV vs Kachasi)"], "Value": [total_matched_gl_nibss, total_matched_gl_dep, csv_vs_kachasi_diff]}).set_index("Description")
-                st.table(df_comp.style.format("₦{:,.2f}").applymap(color_diff, subset=pd.IndexSlice[['Difference (CSV vs Kachasi)'], :]))
+                # FIXED: .applymap replaced with .map
+                st.table(df_comp.style.format("₦{:,.2f}").map(color_diff, subset=['Value']))
+            
             with d3:
                 st.write("**Unmatched CSV Categorization**")
                 st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
@@ -360,4 +363,3 @@ if check_password():
             st.download_button(label="📥 Download Executive Report", data=output.getvalue(), file_name="Executive_Recon_Report.xlsx")
         else:
             st.error("Please upload both GL and NIBSS files.")
-
