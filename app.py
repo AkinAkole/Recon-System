@@ -55,14 +55,11 @@ if check_password():
     # --- SIDEBAR TOOLS ---
     st.sidebar.header("🔍 Quick Search")
     
-    # Initialize Search History in state
     if "search_history" not in st.session_state:
         st.session_state["search_history"] = []
 
-    # Text input with key
     search_ref = st.sidebar.text_input("Enter FCM Reference to Track", key="search_query").strip()
 
-    # --- SEARCH LOGIC & HISTORY UPDATE ---
     if search_ref:
         if search_ref not in st.session_state["search_history"]:
             st.session_state["search_history"].insert(0, search_ref)
@@ -102,7 +99,6 @@ if check_password():
         else:
             st.sidebar.info("💡 Run reconciliation first to search.")
 
-    # --- DISPLAY SEARCH HISTORY ---
     if st.session_state["search_history"]:
         st.sidebar.write("🕒 **Recent Searches**")
         for hist_ref in st.session_state["search_history"]:
@@ -163,21 +159,7 @@ if check_password():
             st.session_state["csv_data"] = df_csv_input
 
             gl_review = df_gl_input.copy() if not df_gl_input.empty else pd.DataFrame(columns=['Description', 'Deposit', 'Withdrawal', 'Reference'])
-            
-            if 'Reference' in gl_review.columns:
-                gl_review['GL_Reference'] = gl_review['Reference'].astype(str).replace('nan', '')
-            else:
-                gl_review['GL_Reference'] = ""
-
-            if 'Description' in gl_review.columns:
-                gl_review['Reference'] = gl_review['Description'].astype(str).str.extract(r'(FCM\d{17})', expand=False).fillna("")
-            else:
-                gl_review['Reference'] = ""
-            
-            cols = list(gl_review.columns)
-            if 'GL_Reference' in cols:
-                cols.insert(2, cols.pop(cols.index('GL_Reference')))
-                gl_review = gl_review[cols]
+            gl_review['Reference'] = gl_review['Description'].astype(str).str.extract(r'(FCM\d{17})', expand=False).fillna("")
                 
             csv_totals = df_csv_input.groupby('unique_reference')['remitted_amount'].sum().to_dict() if not df_csv_input.empty else {}
             gl_review['NIBSS_remitted'] = gl_review['Reference'].map(csv_totals).fillna(0)
@@ -235,13 +217,11 @@ if check_password():
             with d1:
                 st.write("**Bridging (Excel to CSV)**")
                 df_bridge = pd.DataFrame({"Description": ["Matched GL Deposit", "Matched NIBSS Remitted", "Difference (Matched GL vs NIBSS)", "Unmatched GL Dep"], "Value": [total_matched_gl_dep, total_matched_gl_nibss, bridging_diff, unmatched_gl_dep]}).set_index("Description")
-                # FIXED: .applymap replaced with .map
                 st.table(df_bridge.style.format("₦{:,.2f}").map(color_diff, subset=['Value']))
             
             with d2:
                 st.write("**CSV to Excel Analysis**")
                 df_comp = pd.DataFrame({"Description": ["Total Matched CSV Remittance", "Total Matched Kachasi Credit", "Difference (CSV vs Kachasi)"], "Value": [total_matched_gl_nibss, total_matched_gl_dep, csv_vs_kachasi_diff]}).set_index("Description")
-                # FIXED: .applymap replaced with .map
                 st.table(df_comp.style.format("₦{:,.2f}").map(color_diff, subset=['Value']))
             
             with d3:
@@ -250,6 +230,17 @@ if check_password():
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # --- NEW: CALCULATE INDIVIDUAL MDA TOTALS FOR SUMMARY ---
+                mda_configs_list = [
+                    ('NIGERIA CUSTOM SERVICES', 'Customs (NCS)'), 
+                    ('FEDERAL MINISTRY OF FINANCE, BUDGET AND NATIONAL PLANNING - HQTRS', 'NESS'),
+                    ('OFFICE OF THE CHIEF SECURITY OFFICER TO THE PRESIDENT', 'Cyber Security')
+                ]
+                mda_summary_rows = [['--- MDA SPECIFIC TOTALS ---', 'VALUE']]
+                for mda_full, mda_short in mda_configs_list:
+                    val = df_csv_input[df_csv_input['mda_name'] == mda_full]['remitted_amount'].sum() if not df_csv_input.empty else 0
+                    mda_summary_rows.append([f'Total {mda_short}', val])
+
                 summary_sections = [
                     ['EXECUTIVE RECONCILIATION DASHBOARD', ''],
                     ['Run Timestamp', run_time],
@@ -262,17 +253,15 @@ if check_password():
                     ['Total Matched NIBSS Remitted', total_matched_gl_nibss],
                     ['Difference (Matched Excel vs NIBSS)', bridging_diff],
                     ['Total Unmatched Excel Deposit (Exceptions)', unmatched_gl_dep],
-                    ['Matched Item Count', matched_mask_gl.sum()],
+                    ['', '']
+                ] + mda_summary_rows + [
                     ['', ''],
                     ['--- CSV TO EXCEL ANALYSIS (Categorized) ---', 'VALUE'],
                     ['Total Matched CSV Remittance', total_matched_gl_nibss],
                     ['Total Matched Kachasi Credit', total_matched_gl_dep],
-                    ['Difference (Matched CSV vs Kachasi)', csv_vs_kachasi_diff],
-                    ['', ''],
-                    ['Total Unmatched CSV - NIGERIA CUSTOM SERVICES', unmatched_csv_customs],
-                    ['Total Unmatched CSV - OTHER MDAs', unmatched_csv_others],
-                    ['Total Unmatched CSV Remittance', unmatched_csv_customs + unmatched_csv_others]
+                    ['Difference (Matched CSV vs Kachasi)', csv_vs_kachasi_diff]
                 ]
+
                 pd.DataFrame(summary_sections).to_excel(writer, sheet_name='Executive Summary', index=False, header=False)
                 ws_sum = writer.sheets['Executive Summary']
                 for i, row in enumerate(summary_sections, 1):
