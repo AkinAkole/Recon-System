@@ -21,7 +21,7 @@ def check_password():
 
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.title("Secure Access")
+        st.title("DOD Secure Access")
         user_pwd = st.text_input("DOD User Password", type="password")
         if st.button("Unlock System"):
             if "INSTITUTIONAL_PASSWORD" in st.secrets and user_pwd == st.secrets["INSTITUTIONAL_PASSWORD"]: 
@@ -159,7 +159,21 @@ if check_password():
             st.session_state["csv_data"] = df_csv_input
 
             gl_review = df_gl_input.copy() if not df_gl_input.empty else pd.DataFrame(columns=['Description', 'Deposit', 'Withdrawal', 'Reference'])
-            gl_review['Reference'] = gl_review['Description'].astype(str).str.extract(r'(FCM\d{17})', expand=False).fillna("")
+            
+            if 'Reference' in gl_review.columns:
+                gl_review['GL_Reference'] = gl_review['Reference'].astype(str).replace('nan', '')
+            else:
+                gl_review['GL_Reference'] = ""
+
+            if 'Description' in gl_review.columns:
+                gl_review['Reference'] = gl_review['Description'].astype(str).str.extract(r'(FCM\d{17})', expand=False).fillna("")
+            else:
+                gl_review['Reference'] = ""
+            
+            cols = list(gl_review.columns)
+            if 'GL_Reference' in cols:
+                cols.insert(2, cols.pop(cols.index('GL_Reference')))
+                gl_review = gl_review[cols]
                 
             csv_totals = df_csv_input.groupby('unique_reference')['remitted_amount'].sum().to_dict() if not df_csv_input.empty else {}
             gl_review['NIBSS_remitted'] = gl_review['Reference'].map(csv_totals).fillna(0)
@@ -230,16 +244,16 @@ if check_password():
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # --- NEW: CALCULATE INDIVIDUAL MDA TOTALS FOR SUMMARY ---
-                mda_configs_list = [
+                # --- CALCULATE MDA TOTALS FOR SUMMARY ---
+                mda_configs_summary = [
                     ('NIGERIA CUSTOM SERVICES', 'Customs (NCS)'), 
                     ('FEDERAL MINISTRY OF FINANCE, BUDGET AND NATIONAL PLANNING - HQTRS', 'NESS'),
                     ('OFFICE OF THE CHIEF SECURITY OFFICER TO THE PRESIDENT', 'Cyber Security')
                 ]
                 mda_summary_rows = [['--- MDA SPECIFIC TOTALS ---', 'VALUE']]
-                for mda_full, mda_short in mda_configs_list:
-                    val = df_csv_input[df_csv_input['mda_name'] == mda_full]['remitted_amount'].sum() if not df_csv_input.empty else 0
-                    mda_summary_rows.append([f'Total {mda_short}', val])
+                for mda_full, mda_short in mda_configs_summary:
+                    mda_val = df_csv_input[df_csv_input['mda_name'] == mda_full]['remitted_amount'].sum() if not df_csv_input.empty else 0
+                    mda_summary_rows.append([f'Total {mda_short}', mda_val])
 
                 summary_sections = [
                     ['EXECUTIVE RECONCILIATION DASHBOARD', ''],
@@ -253,13 +267,18 @@ if check_password():
                     ['Total Matched NIBSS Remitted', total_matched_gl_nibss],
                     ['Difference (Matched Excel vs NIBSS)', bridging_diff],
                     ['Total Unmatched Excel Deposit (Exceptions)', unmatched_gl_dep],
+                    ['Matched Item Count', matched_mask_gl.sum()],
                     ['', '']
                 ] + mda_summary_rows + [
                     ['', ''],
                     ['--- CSV TO EXCEL ANALYSIS (Categorized) ---', 'VALUE'],
                     ['Total Matched CSV Remittance', total_matched_gl_nibss],
                     ['Total Matched Kachasi Credit', total_matched_gl_dep],
-                    ['Difference (Matched CSV vs Kachasi)', csv_vs_kachasi_diff]
+                    ['Difference (Matched CSV vs Kachasi)', csv_vs_kachasi_diff],
+                    ['', ''],
+                    ['Total Unmatched CSV - NIGERIA CUSTOM SERVICES', unmatched_csv_customs],
+                    ['Total Unmatched CSV - OTHER MDAs', unmatched_csv_others],
+                    ['Total Unmatched CSV Remittance', unmatched_csv_customs + unmatched_csv_others]
                 ]
 
                 pd.DataFrame(summary_sections).to_excel(writer, sheet_name='Executive Summary', index=False, header=False)
