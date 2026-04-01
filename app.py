@@ -22,7 +22,7 @@ def check_password():
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.title("Secure Access")
-        user_pwd = st.text_input("Institutional Password", type="password")
+        user_pwd = st.text_input("DOD User Password", type="password")
         if st.button("Unlock System"):
             if "INSTITUTIONAL_PASSWORD" in st.secrets and user_pwd == st.secrets["INSTITUTIONAL_PASSWORD"]: 
                 st.session_state["password_correct"] = True
