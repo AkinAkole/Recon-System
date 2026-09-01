@@ -104,7 +104,7 @@ if check_password():
         for hist_ref in st.session_state["search_history"]:
             st.sidebar.button(hist_ref, key=f"hist_{hist_ref}", on_click=set_search_callback, args=(hist_ref,))
 
-    # --- DYNAMIC MDA EXTRACTION CONFIGURATION (ENHANCEMENT #3) ---
+    # --- DYNAMIC MDA EXTRACTION CONFIGURATION ---
     st.sidebar.markdown("---")
     st.sidebar.header("🎯 Dynamic MDA Extractions")
     
@@ -195,9 +195,7 @@ if check_password():
                 cols.insert(2, cols.pop(cols.index('GL_Reference')))
                 gl_review = gl_review[cols]
 
-            # --- ENHANCEMENT #1 & #2: DUPLICATE HANDLER & SOURCE FILE TRACKING ---
-            
-            # 1. Isolate Single vs Duplicate NIBSS Entries
+            # --- DUPLICATE HANDLER & SOURCE FILE TRACKING ---
             nibss_review = df_csv_input.copy() if not df_csv_input.empty else pd.DataFrame(columns=['unique_reference', 'remitted_amount', 'bank_id', 'source_file'])
             
             if not nibss_review.empty:
@@ -207,11 +205,9 @@ if check_password():
                 nibss_review['is_duplicate'] = False
                 single_nibss = pd.DataFrame()
 
-            # Build Single NIBSS Reference Mapping
             csv_totals = single_nibss.groupby('unique_reference')['remitted_amount'].sum().to_dict() if not single_nibss.empty else {}
             csv_source_map = single_nibss.set_index('unique_reference')['source_file'].to_dict() if not single_nibss.empty else {}
 
-            # 2. Isolate Single vs Duplicate GL Entries
             if not gl_review.empty:
                 gl_review['is_duplicate'] = gl_review.duplicated(subset=['Reference'], keep='first') & (gl_review['Reference'] != "")
             else:
@@ -219,13 +215,11 @@ if check_password():
 
             single_gl = gl_review[~gl_review['is_duplicate']]
 
-            # Re-map Primary GL review matching on Single Entries
             gl_review['NIBSS_remitted'] = gl_review.apply(lambda x: csv_totals.get(x['Reference'], 0) if not x['is_duplicate'] else 0, axis=1)
             gl_review['NIBSS_reference'] = gl_review.apply(lambda x: x['Reference'] if (x['Reference'] in csv_totals and x['Reference'] != "" and not x['is_duplicate']) else "", axis=1)
             gl_review['Source_File'] = gl_review['Reference'].map(csv_source_map).fillna("")
             gl_review['Variance'] = gl_review['NIBSS_remitted'] - gl_review['Deposit']
 
-            # Match Maps for NIBSS Review
             gl_match_map = single_gl.groupby('Reference')['Deposit'].sum().to_dict() if not single_gl.empty else {}
 
             if not nibss_review.empty:
@@ -238,6 +232,11 @@ if check_password():
             total_matched_gl_dep = gl_review[matched_mask_gl]['Deposit'].sum()
             total_matched_gl_nibss = gl_review[matched_mask_gl]['NIBSS_remitted'].sum()
             unmatched_gl_dep = gl_review[~matched_mask_gl & (~gl_review['is_duplicate']) & (gl_review['Deposit'] > 0)]['Deposit'].sum()
+            
+            # --- DUPLICATE CALCULATIONS FOR SUMMARY ---
+            total_duplicate_gl_dep = gl_review[gl_review['is_duplicate']]['Deposit'].sum()
+            total_duplicate_nibss_remitted = nibss_review[nibss_review['is_duplicate']]['remitted_amount'].sum() if not nibss_review.empty else 0
+
             bridging_diff = total_matched_gl_dep - total_matched_gl_nibss
             csv_vs_kachasi_diff = total_matched_gl_nibss - total_matched_gl_dep
             
@@ -275,12 +274,29 @@ if check_password():
 
             with d1:
                 st.write("**Bridging (Excel to CSV)**")
-                df_bridge = pd.DataFrame({"Description": ["Matched GL Deposit", "Matched NIBSS Remitted", "Difference (Matched GL vs NIBSS)", "Unmatched GL Dep"], "Value": [total_matched_gl_dep, total_matched_gl_nibss, bridging_diff, unmatched_gl_dep]}).set_index("Description")
+                df_bridge = pd.DataFrame({
+                    "Description": [
+                        "Matched GL Deposit", 
+                        "Matched NIBSS Remitted", 
+                        "Difference (Matched GL vs NIBSS)", 
+                        "Unmatched GL Dep",
+                        "Duplicate GL Deposit (Excluded)"
+                    ], 
+                    "Value": [total_matched_gl_dep, total_matched_gl_nibss, bridging_diff, unmatched_gl_dep, total_duplicate_gl_dep]
+                }).set_index("Description")
                 st.table(df_bridge.style.format("₦{:,.2f}").map(color_diff, subset=['Value']))
             
             with d2:
                 st.write("**CSV to Excel Analysis**")
-                df_comp = pd.DataFrame({"Description": ["Total Matched CSV Remittance", "Total Matched Kachasi Credit", "Difference (CSV vs Kachasi)"], "Value": [total_matched_gl_nibss, total_matched_gl_dep, csv_vs_kachasi_diff]}).set_index("Description")
+                df_comp = pd.DataFrame({
+                    "Description": [
+                        "Total Matched CSV Remittance", 
+                        "Total Matched Kachasi Credit", 
+                        "Difference (CSV vs Kachasi)",
+                        "Duplicate NIBSS Remittance (Excluded)"
+                    ], 
+                    "Value": [total_matched_gl_nibss, total_matched_gl_dep, csv_vs_kachasi_diff, total_duplicate_nibss_remitted]
+                }).set_index("Description")
                 st.table(df_comp.style.format("₦{:,.2f}").map(color_diff, subset=['Value']))
             
             with d3:
@@ -308,6 +324,7 @@ if check_password():
                     ['Total Matched NIBSS Remitted', total_matched_gl_nibss],
                     ['Difference (Matched Excel vs NIBSS)', bridging_diff],
                     ['Total Unmatched Excel Deposit (Exceptions)', unmatched_gl_dep],
+                    ['Total Duplicate Excel Deposit (Excluded from Match)', total_duplicate_gl_dep],
                     ['Matched Item Count', matched_mask_gl.sum()],
                     ['', '']
                 ] + mda_summary_rows + [
@@ -316,6 +333,7 @@ if check_password():
                     ['Total Matched CSV Remittance', total_matched_gl_nibss],
                     ['Total Matched Kachasi Credit', total_matched_gl_dep],
                     ['Difference (Matched CSV vs Kachasi)', csv_vs_kachasi_diff],
+                    ['Total Duplicate NIBSS Remittance (Excluded from Match)', total_duplicate_nibss_remitted],
                     ['', ''],
                     ['Total Unmatched CSV - NIGERIA CUSTOM SERVICES', unmatched_csv_customs],
                     ['Total Unmatched CSV - OTHER MDAs', unmatched_csv_others],
@@ -334,7 +352,6 @@ if check_password():
 
                 def write_block(ws, df, start_row, label, sum_cols):
                     if df.empty: return start_row
-                    # Exclude helper boolean column from export
                     export_df = df.drop(columns=['is_duplicate'], errors='ignore')
                     df_clean = export_df.fillna('')
                     df_clean.to_excel(writer, sheet_name=ws.title, startrow=start_row, index=False)
@@ -374,7 +391,6 @@ if check_password():
                 r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] != "") & (~gl_review['is_duplicate'])], 0, "MATCHED GL", gl_sums)
                 r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Deposit'] > 0) & (~gl_review['is_duplicate'])], r, "UNMATCHED DEPOSIT", gl_sums)
                 r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Withdrawal'] > 0) & (~gl_review['is_duplicate'])], r, "UNMATCHED WITHDRAWAL", gl_sums)
-                # Enhancement #1 Table: Isolate GL Duplicates
                 r = write_block(ws_gl, gl_review[gl_review['is_duplicate']], r, "DUPLICATE GL REFERENCES (EXCLUDED FROM MATCH)", gl_sums)
                 write_grand_total(ws_gl, gl_review, r, "GRAND TOTAL (GL_REVIEW)", gl_sums)
 
@@ -385,13 +401,11 @@ if check_password():
                 r_n = write_block(ws_nr, nibss_review[is_m], 0, "MATCHED NIBSS", nr_sums)
                 r_n = write_block(ws_nr, nibss_review[is_c], r_n, "UNMATCHED CUSTOMS (F-REF)", nr_sums)
                 r_n = write_block(ws_nr, nibss_review[(~is_m) & (~is_c) & (~nibss_review['is_duplicate'])], r_n, "OTHER UNMATCHED", nr_sums)
-                # Enhancement #1 Table: Isolate NIBSS Duplicates
                 r_n = write_block(ws_nr, nibss_review[nibss_review['is_duplicate']], r_n, "DUPLICATE NIBSS REFERENCES (EXCLUDED FROM MATCH)", nr_sums)
                 write_grand_total(ws_nr, nibss_review, r_n, "GRAND TOTAL (NIBSS_REVIEW)", nr_sums)
 
-                # --- DYNAMIC MDA EXTRACTION SHEETS (ENHANCEMENT #3) ---
+                # --- DYNAMIC MDA EXTRACTION SHEETS ---
                 for mda_target in selected_mdas:
-                    # Clean sheet title for Excel compliance
                     sname = re.sub(r'[\/*?:\[\]]', '', mda_target)[:25].strip() + "_Extract"
                     ws_ex = writer.book.create_sheet(sname)
                     ptr, pool = 0, []
