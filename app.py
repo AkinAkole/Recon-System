@@ -104,6 +104,26 @@ if check_password():
         for hist_ref in st.session_state["search_history"]:
             st.sidebar.button(hist_ref, key=f"hist_{hist_ref}", on_click=set_search_callback, args=(hist_ref,))
 
+    # --- DYNAMIC MDA EXTRACTION CONFIGURATION (ENHANCEMENT #3) ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("🎯 Dynamic MDA Extractions")
+    
+    default_mda_options = [
+        "NIGERIA CUSTOM SERVICES",
+        "FEDERAL MINISTRY OF FINANCE, BUDGET AND NATIONAL PLANNING - HQTRS",
+        "OFFICE OF THE CHIEF SECURITY OFFICER TO THE PRESIDENT"
+    ]
+    
+    selected_mdas = st.sidebar.multiselect(
+        "Select or Add MDAs for Custom Sheet Extracts:",
+        options=default_mda_options,
+        default=default_mda_options
+    )
+    
+    custom_mda_input = st.sidebar.text_input("Add Extra MDA (exact name):").strip().upper()
+    if custom_mda_input and custom_mda_input not in selected_mdas:
+        selected_mdas.append(custom_mda_input)
+
     # --- FILE UPLOADERS ---
     col1, col2 = st.columns(2)
     with col1:
@@ -174,34 +194,59 @@ if check_password():
             if 'GL_Reference' in cols:
                 cols.insert(2, cols.pop(cols.index('GL_Reference')))
                 gl_review = gl_review[cols]
-                
-            csv_totals = df_csv_input.groupby('unique_reference')['remitted_amount'].sum().to_dict() if not df_csv_input.empty else {}
-            gl_review['NIBSS_remitted'] = gl_review['Reference'].map(csv_totals).fillna(0)
-            gl_review['NIBSS_reference'] = gl_review.apply(lambda x: x['Reference'] if x['Reference'] in csv_totals and x['Reference'] != "" else "", axis=1)
+
+            # --- ENHANCEMENT #1 & #2: DUPLICATE HANDLER & SOURCE FILE TRACKING ---
+            
+            # 1. Isolate Single vs Duplicate NIBSS Entries
+            nibss_review = df_csv_input.copy() if not df_csv_input.empty else pd.DataFrame(columns=['unique_reference', 'remitted_amount', 'bank_id', 'source_file'])
+            
+            if not nibss_review.empty:
+                nibss_review['is_duplicate'] = nibss_review.duplicated(subset=['unique_reference'], keep='first') & (nibss_review['unique_reference'] != "")
+                single_nibss = nibss_review[~nibss_review['is_duplicate']]
+            else:
+                nibss_review['is_duplicate'] = False
+                single_nibss = pd.DataFrame()
+
+            # Build Single NIBSS Reference Mapping
+            csv_totals = single_nibss.groupby('unique_reference')['remitted_amount'].sum().to_dict() if not single_nibss.empty else {}
+            csv_source_map = single_nibss.set_index('unique_reference')['source_file'].to_dict() if not single_nibss.empty else {}
+
+            # 2. Isolate Single vs Duplicate GL Entries
+            if not gl_review.empty:
+                gl_review['is_duplicate'] = gl_review.duplicated(subset=['Reference'], keep='first') & (gl_review['Reference'] != "")
+            else:
+                gl_review['is_duplicate'] = False
+
+            single_gl = gl_review[~gl_review['is_duplicate']]
+
+            # Re-map Primary GL review matching on Single Entries
+            gl_review['NIBSS_remitted'] = gl_review.apply(lambda x: csv_totals.get(x['Reference'], 0) if not x['is_duplicate'] else 0, axis=1)
+            gl_review['NIBSS_reference'] = gl_review.apply(lambda x: x['Reference'] if (x['Reference'] in csv_totals and x['Reference'] != "" and not x['is_duplicate']) else "", axis=1)
+            gl_review['Source_File'] = gl_review['Reference'].map(csv_source_map).fillna("")
             gl_review['Variance'] = gl_review['NIBSS_remitted'] - gl_review['Deposit']
 
-            gl_match_map = gl_review.groupby('Reference')['Deposit'].sum().to_dict()
-            nibss_review = df_csv_input.copy() if not df_csv_input.empty else pd.DataFrame(columns=['unique_reference', 'remitted_amount', 'bank_id'])
+            # Match Maps for NIBSS Review
+            gl_match_map = single_gl.groupby('Reference')['Deposit'].sum().to_dict() if not single_gl.empty else {}
 
             if not nibss_review.empty:
                 b_idx = list(nibss_review.columns).index('bank_id') + 1 if 'bank_id' in nibss_review.columns else 1
-                nibss_review.insert(b_idx, 'Kachasi_ref', nibss_review['unique_reference'].map(lambda x: x if x in gl_match_map else ""))
-                nibss_review.insert(b_idx+1, 'Kachasi_In_GL', nibss_review['unique_reference'].map(gl_match_map).fillna(0))
+                nibss_review.insert(b_idx, 'Kachasi_ref', nibss_review.apply(lambda x: x['unique_reference'] if (x['unique_reference'] in gl_match_map and not x['is_duplicate']) else "", axis=1))
+                nibss_review.insert(b_idx+1, 'Kachasi_In_GL', nibss_review.apply(lambda x: gl_match_map.get(x['unique_reference'], 0) if not x['is_duplicate'] else 0, axis=1))
                 nibss_review.insert(b_idx+2, 'Settle_Variance', nibss_review['remitted_amount'] - nibss_review['Kachasi_In_GL'])
 
-            matched_mask_gl = (gl_review['NIBSS_reference'] != "")
+            matched_mask_gl = (gl_review['NIBSS_reference'] != "") & (~gl_review['is_duplicate'])
             total_matched_gl_dep = gl_review[matched_mask_gl]['Deposit'].sum()
             total_matched_gl_nibss = gl_review[matched_mask_gl]['NIBSS_remitted'].sum()
-            unmatched_gl_dep = gl_review[~matched_mask_gl & (gl_review['Deposit'] > 0)]['Deposit'].sum()
+            unmatched_gl_dep = gl_review[~matched_mask_gl & (~gl_review['is_duplicate']) & (gl_review['Deposit'] > 0)]['Deposit'].sum()
             bridging_diff = total_matched_gl_dep - total_matched_gl_nibss
             csv_vs_kachasi_diff = total_matched_gl_nibss - total_matched_gl_dep
             
-            is_m = (nibss_review['Kachasi_ref'] != "") if 'Kachasi_ref' in nibss_review.columns else pd.Series([False]*len(nibss_review))
+            is_m = (nibss_review['Kachasi_ref'] != "") & (~nibss_review['is_duplicate']) if 'Kachasi_ref' in nibss_review.columns else pd.Series([False]*len(nibss_review))
             mda_check_col = nibss_review['mda_name'] if 'mda_name' in nibss_review.columns else pd.Series([""]*len(nibss_review))
-            is_c = ((nibss_review['Kachasi_ref'] == "") & (mda_check_col == 'NIGERIA CUSTOM SERVICES') & (nibss_review['unique_reference'].str.startswith('F', na=False)))
+            is_c = ((nibss_review['Kachasi_ref'] == "") & (mda_check_col == 'NIGERIA CUSTOM SERVICES') & (nibss_review['unique_reference'].str.startswith('F', na=False)) & (~nibss_review['is_duplicate']))
             
             unmatched_csv_customs = nibss_review[is_c]['remitted_amount'].sum() if not nibss_review.empty else 0
-            unmatched_csv_others = nibss_review[~is_m & ~is_c]['remitted_amount'].sum() if not nibss_review.empty else 0
+            unmatched_csv_others = nibss_review[~is_m & ~is_c & (~nibss_review['is_duplicate'])]['remitted_amount'].sum() if not nibss_review.empty else 0
 
             st.markdown("---")
             st.subheader("📊 Executive Insights")
@@ -244,16 +289,12 @@ if check_password():
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # --- CALCULATE MDA TOTALS FOR SUMMARY ---
-                mda_configs_summary = [
-                    ('NIGERIA CUSTOM SERVICES', 'Customs (NCS)'), 
-                    ('FEDERAL MINISTRY OF FINANCE, BUDGET AND NATIONAL PLANNING - HQTRS', 'NESS'),
-                    ('OFFICE OF THE CHIEF SECURITY OFFICER TO THE PRESIDENT', 'Cyber Security')
-                ]
+                
+                # --- CALCULATE MDA TOTALS FOR SUMMARY (DYNAMIC) ---
                 mda_summary_rows = [['--- MDA SPECIFIC TOTALS ---', 'VALUE']]
-                for mda_full, mda_short in mda_configs_summary:
-                    mda_val = df_csv_input[df_csv_input['mda_name'] == mda_full]['remitted_amount'].sum() if not df_csv_input.empty else 0
-                    mda_summary_rows.append([f'Total {mda_short}', mda_val])
+                for mda_target in selected_mdas:
+                    mda_val = df_csv_input[df_csv_input['mda_name'] == mda_target]['remitted_amount'].sum() if not df_csv_input.empty else 0
+                    mda_summary_rows.append([f'Total {mda_target}', mda_val])
 
                 summary_sections = [
                     ['EXECUTIVE RECONCILIATION DASHBOARD', ''],
@@ -293,7 +334,9 @@ if check_password():
 
                 def write_block(ws, df, start_row, label, sum_cols):
                     if df.empty: return start_row
-                    df_clean = df.fillna('')
+                    # Exclude helper boolean column from export
+                    export_df = df.drop(columns=['is_duplicate'], errors='ignore')
+                    df_clean = export_df.fillna('')
                     df_clean.to_excel(writer, sheet_name=ws.title, startrow=start_row, index=False)
                     h_row = start_row + 1 
                     for r in range(h_row, h_row + len(df_clean) + 1):
@@ -317,32 +360,39 @@ if check_password():
 
                 def write_grand_total(ws, df, row, label, sum_cols):
                     ws.cell(row=row, column=2, value=label).font = RED_BOLD
-                    for i, col in enumerate(df.columns, 1):
+                    export_df = df.drop(columns=['is_duplicate'], errors='ignore')
+                    for i, col in enumerate(export_df.columns, 1):
                         if col in sum_cols:
                             cell = ws.cell(row=row, column=i, value=df[col].sum())
                             cell.font = BLACK_BOLD; cell.border = DOUBLE_BORDER; cell.number_format = '#,##0.00'
                     return row + 2
 
+                # --- GL REVIEW SHEET GENERATION ---
                 ws_gl = writer.book.create_sheet('GL_Review')
                 gl_sums = ['Deposit', 'Withdrawal', 'NIBSS_remitted', 'Variance']
-                r = write_block(ws_gl, gl_review[gl_review['NIBSS_reference'] != ""], 0, "MATCHED GL", gl_sums)
-                r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Deposit'] > 0)], r, "UNMATCHED DEPOSIT", gl_sums)
-                r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Withdrawal'] > 0)], r, "UNMATCHED WITHDRAWAL", gl_sums)
+                
+                r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] != "") & (~gl_review['is_duplicate'])], 0, "MATCHED GL", gl_sums)
+                r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Deposit'] > 0) & (~gl_review['is_duplicate'])], r, "UNMATCHED DEPOSIT", gl_sums)
+                r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Withdrawal'] > 0) & (~gl_review['is_duplicate'])], r, "UNMATCHED WITHDRAWAL", gl_sums)
+                # Enhancement #1 Table: Isolate GL Duplicates
+                r = write_block(ws_gl, gl_review[gl_review['is_duplicate']], r, "DUPLICATE GL REFERENCES (EXCLUDED FROM MATCH)", gl_sums)
                 write_grand_total(ws_gl, gl_review, r, "GRAND TOTAL (GL_REVIEW)", gl_sums)
 
+                # --- NIBSS REVIEW SHEET GENERATION ---
                 ws_nr = writer.book.create_sheet('NIBSS_Review')
                 nr_sums = ['remitted_amount', 'collected_amount', 'fee', 'Kachasi_In_GL', 'Settle_Variance']
+                
                 r_n = write_block(ws_nr, nibss_review[is_m], 0, "MATCHED NIBSS", nr_sums)
                 r_n = write_block(ws_nr, nibss_review[is_c], r_n, "UNMATCHED CUSTOMS (F-REF)", nr_sums)
-                r_n = write_block(ws_nr, nibss_review[(~is_m) & (~is_c)], r_n, "OTHER UNMATCHED", nr_sums)
+                r_n = write_block(ws_nr, nibss_review[(~is_m) & (~is_c) & (~nibss_review['is_duplicate'])], r_n, "OTHER UNMATCHED", nr_sums)
+                # Enhancement #1 Table: Isolate NIBSS Duplicates
+                r_n = write_block(ws_nr, nibss_review[nibss_review['is_duplicate']], r_n, "DUPLICATE NIBSS REFERENCES (EXCLUDED FROM MATCH)", nr_sums)
                 write_grand_total(ws_nr, nibss_review, r_n, "GRAND TOTAL (NIBSS_REVIEW)", nr_sums)
 
-                mda_configs = [
-                    ('NIGERIA CUSTOM SERVICES', 'Customs_Extract'), 
-                    ('FEDERAL MINISTRY OF FINANCE, BUDGET AND NATIONAL PLANNING - HQTRS', 'NESS_Extract'),
-                    ('OFFICE OF THE CHIEF SECURITY OFFICER TO THE PRESIDENT', 'CyberSec_Extract')
-                ]
-                for mda_target, sname in mda_configs:
+                # --- DYNAMIC MDA EXTRACTION SHEETS (ENHANCEMENT #3) ---
+                for mda_target in selected_mdas:
+                    # Clean sheet title for Excel compliance
+                    sname = re.sub(r'[\/*?:\[\]]', '', mda_target)[:25].strip() + "_Extract"
                     ws_ex = writer.book.create_sheet(sname)
                     ptr, pool = 0, []
                     for fn, df_f in csv_dict.items():
@@ -359,6 +409,7 @@ if check_password():
                     else: 
                         write_grand_total(ws_ex, pd.concat(pool), ptr, f"GRAND TOTAL ({sname})", ['remitted_amount', 'collected_amount', 'fee'])
 
+                # --- AUDIT LOG ---
                 ws_log = writer.book.create_sheet('Run_Log')
                 log_data = [['RECONCILIATION AUDIT LOG', ''], ['Processed At:', run_time], ['', ''], ['SOURCE FILES USED:', 'TYPE']]
                 for f in gl_uploads: log_data.append([f.name, 'EXCEL / GL'])
