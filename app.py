@@ -208,7 +208,6 @@ if check_password():
             csv_totals = single_nibss.groupby('unique_reference')['remitted_amount'].sum().to_dict() if not single_nibss.empty else {}
             csv_source_map = single_nibss.set_index('unique_reference')['source_file'].to_dict() if not single_nibss.empty else {}
 
-            # Mark duplicate GL entries (exact row duplicate flags)
             if not gl_review.empty:
                 gl_review['is_duplicate'] = gl_review.duplicated(subset=['Reference'], keep='first') & (gl_review['Reference'] != "")
             else:
@@ -221,14 +220,18 @@ if check_password():
             gl_review['Source_File'] = gl_review['Reference'].map(csv_source_map).fillna("")
             gl_review['Variance'] = gl_review['NIBSS_remitted'] - gl_review['Deposit']
 
-            # AGGREGATE GL MATCH MAP: Grouping sum of ALL non-duplicate GL deposits per reference to account for multiple entries
+            # --- MULTIPLE REFERENCE NETTING LOGIC ---
+            # Groups and sums ALL Deposit entries per Reference in single_gl
             gl_match_map = single_gl[single_gl['Reference'] != ""].groupby('Reference')['Deposit'].sum().to_dict() if not single_gl.empty else {}
 
             if not nibss_review.empty:
                 b_idx = list(nibss_review.columns).index('bank_id') + 1 if 'bank_id' in nibss_review.columns else 1
                 nibss_review.insert(b_idx, 'Kachasi_ref', nibss_review.apply(lambda x: x['unique_reference'] if (x['unique_reference'] in gl_match_map and not x['is_duplicate']) else "", axis=1))
+                
+                # Maps the combined net total of all matching GL entries
                 nibss_review.insert(b_idx+1, 'Kachasi_In_GL', nibss_review.apply(lambda x: gl_match_map.get(x['unique_reference'], 0) if not x['is_duplicate'] else 0, axis=1))
-                # Settle Variance: Reflects Net Remitted Amount minus Summed GL Credit (Kachasi_In_GL)
+                
+                # Settle_Variance reflects the Net Remitted Amount minus the full combined Kachasi GL sum
                 nibss_review.insert(b_idx+2, 'Settle_Variance', nibss_review['remitted_amount'] - nibss_review['Kachasi_In_GL'])
 
             matched_mask_gl = (gl_review['NIBSS_reference'] != "") & (~gl_review['is_duplicate'])
