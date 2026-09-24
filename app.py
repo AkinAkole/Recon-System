@@ -123,6 +123,7 @@ selected_mdas = st.sidebar.multiselect(
 )
 
 custom_mda_input = st.sidebar.text_input("Add Extra MDA (exact name):").strip().upper()
+
 if custom_mda_input and custom_mda_input not in selected_mdas:
     selected_mdas.append(custom_mda_input)
 
@@ -365,14 +366,15 @@ if st.button("🚀 Run Reconciliation"):
                 if isinstance(row[1], (int, float)): 
                     ws_sum[f'B{i}'].number_format = '#,##0.00'
 
-            # 2. ENHANCED BLOCK-WRITING FUNCTION (WITH EXPLICIT VISIBLE TOTAL LABELS)
+            # 2. ROBUST BLOCK-WRITING FUNCTIONS (GUARANTEES TOTAL LABELS ON ALL SHEETS)
             def write_block(ws, df, start_row, label, sum_cols):
                 if df.empty: 
                     return start_row
                 
                 actual_start_row = max(1, start_row)
-                
                 export_df = df.drop(columns=['is_duplicate'], errors='ignore').fillna('')
+                
+                # Write DataFrame content via pandas to preserve structure
                 export_df.to_excel(writer, sheet_name=ws.title, startrow=actual_start_row - 1, index=False)
                 
                 header_row = actual_start_row
@@ -384,7 +386,7 @@ if st.button("🚀 Run Reconciliation"):
                     cell = ws.cell(row=header_row, column=col_idx)
                     cell.fill = NAVY_FILL
                     cell.font = WHITE_TEXT
-                    cell.alignment = Alignment(horizontal='center')
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
                     cell.border = THIN_BORDER
 
                 # Format Data Rows
@@ -399,29 +401,29 @@ if st.button("🚀 Run Reconciliation"):
                         col_name = str(export_df.columns[col_idx - 1]).lower()
                         if any(x in col_name for x in ['amount', 'fee', 'deposit', 'withdrawal', 'variance', 'remitted', 'in_gl']):
                             cell.number_format = '#,##0.00'
-                            cell.alignment = Alignment(horizontal='right')
+                            cell.alignment = Alignment(horizontal='right', vertical='center')
 
                 # Format Subtotal Row
                 subtotal_row = data_end_row + 1
                 
-                # Apply borders across all subtotal columns first
                 for col_idx in range(1, len(export_df.columns) + 1):
                     cell = ws.cell(row=subtotal_row, column=col_idx)
                     cell.border = THIN_BORDER
 
-                # Write and merge Subtotal Label explicitly
-                subtotal_label = f"SUB-TOTAL: {label}"
-                ws.cell(row=subtotal_row, column=1, value=subtotal_label).font = BLACK_BOLD
-                ws.cell(row=subtotal_row, column=1).alignment = Alignment(horizontal='left', vertical='center')
+                # Force Write Label directly into Column 1
+                label_cell = ws.cell(row=subtotal_row, column=1)
+                label_cell.value = f"SUB-TOTAL: {label}"
+                label_cell.font = BLACK_BOLD
+                label_cell.alignment = Alignment(horizontal='left', vertical='center')
 
-                # Calculate and write numerical subtotals
+                # Write Numeric Sums
                 for col_idx, col_name in enumerate(export_df.columns, 1):
                     if col_name in sum_cols:
                         cell = ws.cell(row=subtotal_row, column=col_idx)
                         cell.value = df[col_name].sum()
                         cell.font = BLACK_BOLD
                         cell.number_format = '#,##0.00'
-                        cell.alignment = Alignment(horizontal='right')
+                        cell.alignment = Alignment(horizontal='right', vertical='center')
 
                 return subtotal_row + 2
 
@@ -432,23 +434,24 @@ if st.button("🚀 Run Reconciliation"):
                 actual_row = max(1, row)
                 export_df = df.drop(columns=['is_duplicate'], errors='ignore')
                 
-                # Apply double borders across all grand total columns first
                 for col_idx in range(1, len(export_df.columns) + 1):
                     cell = ws.cell(row=actual_row, column=col_idx)
                     cell.border = DOUBLE_BORDER
 
-                # Write Grand Total Label clearly
-                ws.cell(row=actual_row, column=1, value=label).font = RED_BOLD
-                ws.cell(row=actual_row, column=1).alignment = Alignment(horizontal='left', vertical='center')
+                # Force Write Grand Total Label directly into Column 1
+                label_cell = ws.cell(row=actual_row, column=1)
+                label_cell.value = str(label)
+                label_cell.font = RED_BOLD
+                label_cell.alignment = Alignment(horizontal='left', vertical='center')
                 
-                # Calculate and write grand total sums
+                # Write Numeric Sums
                 for col_idx, col_name in enumerate(export_df.columns, 1):
                     if col_name in sum_cols:
                         cell = ws.cell(row=actual_row, column=col_idx)
                         cell.value = df[col_name].sum()
                         cell.font = RED_BOLD
                         cell.number_format = '#,##0.00'
-                        cell.alignment = Alignment(horizontal='right')
+                        cell.alignment = Alignment(horizontal='right', vertical='center')
 
                 return actual_row + 2
 
@@ -515,7 +518,7 @@ if st.button("🚀 Run Reconciliation"):
             # Auto-fit Column Widths across all sheets
             for sheet in writer.book.worksheets:
                 for col in sheet.columns: 
-                    sheet.column_dimensions[col[0].column_letter].width = 28
+                    sheet.column_dimensions[col[0].column_letter].width = 30
 
         st.download_button(label="📥 Download Executive Report", data=output.getvalue(), file_name="Executive_Recon_Report.xlsx")
     else:
