@@ -365,12 +365,11 @@ if st.button("🚀 Run Reconciliation"):
                 if isinstance(row[1], (int, float)): 
                     ws_sum[f'B{i}'].number_format = '#,##0.00'
 
-            # 2. SAFE BLOCK-WRITING FUNCTION (1-BASED INDEXING FIX)
+            # 2. ENHANCED BLOCK-WRITING FUNCTION (WITH EXPLICIT VISIBLE TOTAL LABELS)
             def write_block(ws, df, start_row, label, sum_cols):
                 if df.empty: 
                     return start_row
                 
-                # Excel is 1-indexed; convert 0 offset to row 1
                 actual_start_row = max(1, start_row)
                 
                 export_df = df.drop(columns=['is_duplicate'], errors='ignore').fillna('')
@@ -404,16 +403,25 @@ if st.button("🚀 Run Reconciliation"):
 
                 # Format Subtotal Row
                 subtotal_row = data_end_row + 1
-                ws.cell(row=subtotal_row, column=1, value=f"SUB-TOTAL: {label}").font = BLACK_BOLD
-                ws.cell(row=subtotal_row, column=1).border = THIN_BORDER
-
-                for col_idx, col_name in enumerate(export_df.columns, 1):
+                
+                # Apply borders across all subtotal columns first
+                for col_idx in range(1, len(export_df.columns) + 1):
                     cell = ws.cell(row=subtotal_row, column=col_idx)
                     cell.border = THIN_BORDER
+
+                # Write and merge Subtotal Label explicitly
+                subtotal_label = f"SUB-TOTAL: {label}"
+                ws.cell(row=subtotal_row, column=1, value=subtotal_label).font = BLACK_BOLD
+                ws.cell(row=subtotal_row, column=1).alignment = Alignment(horizontal='left', vertical='center')
+
+                # Calculate and write numerical subtotals
+                for col_idx, col_name in enumerate(export_df.columns, 1):
                     if col_name in sum_cols:
+                        cell = ws.cell(row=subtotal_row, column=col_idx)
                         cell.value = df[col_name].sum()
                         cell.font = BLACK_BOLD
                         cell.number_format = '#,##0.00'
+                        cell.alignment = Alignment(horizontal='right')
 
                 return subtotal_row + 2
 
@@ -423,16 +431,24 @@ if st.button("🚀 Run Reconciliation"):
                 
                 actual_row = max(1, row)
                 export_df = df.drop(columns=['is_duplicate'], errors='ignore')
-                ws.cell(row=actual_row, column=1, value=label).font = RED_BOLD
-                ws.cell(row=actual_row, column=1).border = DOUBLE_BORDER
                 
-                for col_idx, col_name in enumerate(export_df.columns, 1):
+                # Apply double borders across all grand total columns first
+                for col_idx in range(1, len(export_df.columns) + 1):
                     cell = ws.cell(row=actual_row, column=col_idx)
                     cell.border = DOUBLE_BORDER
+
+                # Write Grand Total Label clearly
+                ws.cell(row=actual_row, column=1, value=label).font = RED_BOLD
+                ws.cell(row=actual_row, column=1).alignment = Alignment(horizontal='left', vertical='center')
+                
+                # Calculate and write grand total sums
+                for col_idx, col_name in enumerate(export_df.columns, 1):
                     if col_name in sum_cols:
+                        cell = ws.cell(row=actual_row, column=col_idx)
                         cell.value = df[col_name].sum()
-                        cell.font = BLACK_BOLD
+                        cell.font = RED_BOLD
                         cell.number_format = '#,##0.00'
+                        cell.alignment = Alignment(horizontal='right')
 
                 return actual_row + 2
 
@@ -456,7 +472,7 @@ if st.button("🚀 Run Reconciliation"):
             r_n = write_block(ws_nr, nibss_review[nibss_review['is_duplicate']], r_n, "DUPLICATE NIBSS REFERENCES (EXCLUDED)", nr_sums)
             write_grand_total(ws_nr, nibss_review, r_n, "GRAND TOTAL (NIBSS_REVIEW)", nr_sums)
 
-            # 5. DYNAMIC MDA EXTRACTION SHEETS (UNIQUE & SAFE NAME ENFORCEMENT)
+            # 5. DYNAMIC MDA EXTRACTION SHEETS
             used_sheet_names = set(writer.book.sheetnames)
             for mda_target in selected_mdas:
                 clean_name = re.sub(r'[\/*?:\[\]]', '', str(mda_target)).strip()[:20]
@@ -464,7 +480,6 @@ if st.button("🚀 Run Reconciliation"):
                 sname = base_sname
                 counter = 1
                 
-                # Prevent sheet collision corruption
                 while sname in used_sheet_names:
                     suffix = f"_{counter}"
                     sname = f"{base_sname[:31 - len(suffix)]}{suffix}"
@@ -480,7 +495,7 @@ if st.button("🚀 Run Reconciliation"):
                         ext = df_f[cond]
                         if not ext.empty:
                             ws_ex.cell(row=ptr, column=1, value=f"FILE: {fn}").font = BLACK_BOLD
-                            ptr = write_block(ws_ex, ext, ptr + 1, fn, ['remitted_amount', 'collected_amount', 'fee'])
+                            ptr = write_block(ws_ex, ext, ptr + 1, f"EXTRACT ({fn})", ['remitted_amount', 'collected_amount', 'fee'])
                             pool.append(ext)
                 if not pool:
                     zero_df = pd.DataFrame([["NO RECORDS FOUND", 0.00, 0.00, 0.00, mda_target]], columns=['unique_reference', 'remitted_amount', 'collected_amount', 'fee', 'mda_name'])
