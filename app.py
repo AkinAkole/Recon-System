@@ -365,15 +365,18 @@ if st.button("🚀 Run Reconciliation"):
                 if isinstance(row[1], (int, float)): 
                     ws_sum[f'B{i}'].number_format = '#,##0.00'
 
-            # 2. SAFE BLOCK-WRITING FUNCTION
+            # 2. SAFE BLOCK-WRITING FUNCTION (1-BASED INDEXING FIX)
             def write_block(ws, df, start_row, label, sum_cols):
                 if df.empty: 
                     return start_row
                 
-                export_df = df.drop(columns=['is_duplicate'], errors='ignore').fillna('')
-                export_df.to_excel(writer, sheet_name=ws.title, startrow=start_row, index=False)
+                # Excel is 1-indexed; convert 0 offset to row 1
+                actual_start_row = max(1, start_row)
                 
-                header_row = start_row + 1
+                export_df = df.drop(columns=['is_duplicate'], errors='ignore').fillna('')
+                export_df.to_excel(writer, sheet_name=ws.title, startrow=actual_start_row - 1, index=False)
+                
+                header_row = actual_start_row
                 data_start_row = header_row + 1
                 data_end_row = header_row + len(export_df)
                 
@@ -418,25 +421,26 @@ if st.button("🚀 Run Reconciliation"):
                 if df.empty:
                     return row
                 
+                actual_row = max(1, row)
                 export_df = df.drop(columns=['is_duplicate'], errors='ignore')
-                ws.cell(row=row, column=1, value=label).font = RED_BOLD
-                ws.cell(row=row, column=1).border = DOUBLE_BORDER
+                ws.cell(row=actual_row, column=1, value=label).font = RED_BOLD
+                ws.cell(row=actual_row, column=1).border = DOUBLE_BORDER
                 
                 for col_idx, col_name in enumerate(export_df.columns, 1):
-                    cell = ws.cell(row=row, column=col_idx)
+                    cell = ws.cell(row=actual_row, column=col_idx)
                     cell.border = DOUBLE_BORDER
                     if col_name in sum_cols:
                         cell.value = df[col_name].sum()
                         cell.font = BLACK_BOLD
                         cell.number_format = '#,##0.00'
 
-                return row + 2
+                return actual_row + 2
 
             # 3. GL REVIEW SHEET
             ws_gl = writer.book.create_sheet('GL_Review')
             gl_sums = ['Deposit', 'Withdrawal', 'NIBSS_remitted', 'Variance']
             
-            r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] != "") & (~gl_review['is_duplicate'])], 0, "MATCHED GL", gl_sums)
+            r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] != "") & (~gl_review['is_duplicate'])], 1, "MATCHED GL", gl_sums)
             r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Deposit'] > 0) & (~gl_review['is_duplicate'])], r, "UNMATCHED DEPOSIT", gl_sums)
             r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Withdrawal'] > 0) & (~gl_review['is_duplicate'])], r, "UNMATCHED WITHDRAWAL", gl_sums)
             r = write_block(ws_gl, gl_review[gl_review['is_duplicate']], r, "DUPLICATE GL REFERENCES (EXCLUDED)", gl_sums)
@@ -446,30 +450,41 @@ if st.button("🚀 Run Reconciliation"):
             ws_nr = writer.book.create_sheet('NIBSS_Review')
             nr_sums = ['remitted_amount', 'collected_amount', 'fee', 'Kachasi_In_GL', 'Settle_Variance']
             
-            r_n = write_block(ws_nr, nibss_review[is_m], 0, "MATCHED NIBSS", nr_sums)
+            r_n = write_block(ws_nr, nibss_review[is_m], 1, "MATCHED NIBSS", nr_sums)
             r_n = write_block(ws_nr, nibss_review[is_c], r_n, "UNMATCHED CUSTOMS (F-REF)", nr_sums)
             r_n = write_block(ws_nr, nibss_review[(~is_m) & (~is_c) & (~nibss_review['is_duplicate'])], r_n, "OTHER UNMATCHED", nr_sums)
             r_n = write_block(ws_nr, nibss_review[nibss_review['is_duplicate']], r_n, "DUPLICATE NIBSS REFERENCES (EXCLUDED)", nr_sums)
             write_grand_total(ws_nr, nibss_review, r_n, "GRAND TOTAL (NIBSS_REVIEW)", nr_sums)
 
-            # 5. DYNAMIC MDA EXTRACTION SHEETS (SAFE NAMES)
+            # 5. DYNAMIC MDA EXTRACTION SHEETS (UNIQUE & SAFE NAME ENFORCEMENT)
+            used_sheet_names = set(writer.book.sheetnames)
             for mda_target in selected_mdas:
-                safe_mda_name = re.sub(r'[\/*?:\[\]]', '', str(mda_target)).strip()[:20]
-                sname = f"{safe_mda_name}_Extract"
+                clean_name = re.sub(r'[\/*?:\[\]]', '', str(mda_target)).strip()[:20]
+                base_sname = f"{clean_name}_Extract"[:31]
+                sname = base_sname
+                counter = 1
+                
+                # Prevent sheet collision corruption
+                while sname in used_sheet_names:
+                    suffix = f"_{counter}"
+                    sname = f"{base_sname[:31 - len(suffix)]}{suffix}"
+                    counter += 1
+                used_sheet_names.add(sname)
+
                 ws_ex = writer.book.create_sheet(sname)
                 
-                ptr, pool = 0, []
+                ptr, pool = 1, []
                 for fn, df_f in csv_dict.items():
                     if 'mda_name' in df_f.columns and 'unique_reference' in df_f.columns:
                         cond = (df_f['mda_name'] == mda_target) & (df_f['unique_reference'].astype(str).str.startswith('F', na=False))
                         ext = df_f[cond]
                         if not ext.empty:
-                            ws_ex.cell(row=ptr+1, column=1, value=f"FILE: {fn}").font = BLACK_BOLD
+                            ws_ex.cell(row=ptr, column=1, value=f"FILE: {fn}").font = BLACK_BOLD
                             ptr = write_block(ws_ex, ext, ptr + 1, fn, ['remitted_amount', 'collected_amount', 'fee'])
                             pool.append(ext)
                 if not pool:
                     zero_df = pd.DataFrame([["NO RECORDS FOUND", 0.00, 0.00, 0.00, mda_target]], columns=['unique_reference', 'remitted_amount', 'collected_amount', 'fee', 'mda_name'])
-                    write_block(ws_ex, zero_df, 0, "ZERO EXTRACT", ['remitted_amount', 'collected_amount', 'fee'])
+                    write_block(ws_ex, zero_df, 1, "ZERO EXTRACT", ['remitted_amount', 'collected_amount', 'fee'])
                 else: 
                     write_grand_total(ws_ex, pd.concat(pool), ptr, f"GRAND TOTAL ({sname})", ['remitted_amount', 'collected_amount', 'fee'])
 
