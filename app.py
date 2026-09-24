@@ -66,16 +66,19 @@ if search_ref:
         st.session_state["search_history"].insert(0, search_ref)
         st.session_state["search_history"] = st.session_state["search_history"][:5]
 
-    if "gl_data" in st.session_state and "csv_data" in st.session_state:
+    gl_df = st.session_state.get("gl_data")
+    csv_df = st.session_state.get("csv_data")
+
+    if gl_df is not None and csv_df is not None:
         st.sidebar.markdown("---")
         st.sidebar.subheader(f"🔍 Tracking: {search_ref}")
         
-        gl_match = st.session_state["gl_data"][st.session_state["gl_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
-        csv_match = st.session_state["csv_data"][st.session_state["csv_data"].astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
+        gl_match = gl_df[gl_df.astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
+        csv_match = csv_df[csv_df.astype(str).apply(lambda x: x.str.contains(search_ref, case=False)).any(axis=1)]
 
         if not gl_match.empty and not csv_match.empty:
-            gl_amt = gl_match['Deposit'].sum()
-            ni_amt = csv_match['remitted_amount'].sum()
+            gl_amt = gl_match['Deposit'].sum() if 'Deposit' in gl_match.columns else 0
+            ni_amt = csv_match['remitted_amount'].sum() if 'remitted_amount' in csv_match.columns else 0
             diff = ni_amt - gl_amt
             if diff == 0:
                 st.sidebar.success(f"✅ **Perfect Match**\n\nBalanced at ₦{gl_amt:,.2f}")
@@ -137,9 +140,10 @@ def heavy_clean_file(uploaded_file):
         uploaded_file.seek(0)
         content = uploaded_file.read()
         text = content.replace(b'\x00', b'').decode('utf-8', errors='ignore')
-        if '\t' in text: text = text.replace(',', ';').replace('\t', ',')
+        if '\t' in text: 
+            text = text.replace(',', ';').replace('\t', ',')
         return io.StringIO(text)
-    except: 
+    except Exception:
         return None
 
 def clean_num(col):
@@ -158,7 +162,8 @@ if st.button("🚀 Run Reconciliation"):
                 st.error(f"❌ Error: File '{f.name}' missing 'Description'.")
                 st.stop()
             for c in ['Deposit', 'Withdrawal', 'Balance']:
-                if c in df.columns: df[c] = clean_num(df[c])
+                if c in df.columns: 
+                    df[c] = clean_num(df[c])
             all_gl.append(df)
         df_gl_input = pd.concat(all_gl, ignore_index=True) if all_gl else pd.DataFrame()
 
@@ -169,7 +174,8 @@ if st.button("🚀 Run Reconciliation"):
                 df.columns = [str(c).strip().lower() for c in df.columns]
                 df.rename(columns={'uniquereference': 'unique_reference', 'remittedamount': 'remitted_amount', 'mdaname': 'mda_name'}, inplace=True)
                 for c in ['remitted_amount', 'collected_amount', 'fee']:
-                    if c in df.columns: df[c] = clean_num(df[c])
+                    if c in df.columns: 
+                        df[c] = clean_num(df[c])
                 df['source_file'] = f.name
                 if 'mda_name' in df.columns:
                     df['mda_name'] = df['mda_name'].astype(str).str.strip().str.upper()
@@ -200,7 +206,7 @@ if st.button("🚀 Run Reconciliation"):
         # --- DUPLICATE HANDLER & SOURCE FILE TRACKING ---
         nibss_review = df_csv_input.copy() if not df_csv_input.empty else pd.DataFrame(columns=['unique_reference', 'remitted_amount', 'bank_id', 'source_file'])
         
-        if not nibss_review.empty:
+        if not nibss_review.empty and 'unique_reference' in nibss_review.columns:
             nibss_review['is_duplicate'] = nibss_review.duplicated(subset=['unique_reference'], keep='first') & (nibss_review['unique_reference'] != "")
             single_nibss = nibss_review[~nibss_review['is_duplicate']]
         else:
@@ -232,12 +238,12 @@ if st.button("🚀 Run Reconciliation"):
             nibss_review.insert(b_idx+2, 'Settle_Variance', nibss_review['remitted_amount'] - nibss_review['Kachasi_In_GL'])
 
         matched_mask_gl = (gl_review['NIBSS_reference'] != "") & (~gl_review['is_duplicate'])
-        total_matched_gl_dep = gl_review[matched_mask_gl]['Deposit'].sum()
-        total_matched_gl_nibss = gl_review[matched_mask_gl]['NIBSS_remitted'].sum()
-        unmatched_gl_dep = gl_review[~matched_mask_gl & (~gl_review['is_duplicate']) & (gl_review['Deposit'] > 0)]['Deposit'].sum()
+        total_matched_gl_dep = gl_review[matched_mask_gl]['Deposit'].sum() if not gl_review.empty else 0
+        total_matched_gl_nibss = gl_review[matched_mask_gl]['NIBSS_remitted'].sum() if not gl_review.empty else 0
+        unmatched_gl_dep = gl_review[~matched_mask_gl & (~gl_review['is_duplicate']) & (gl_review['Deposit'] > 0)]['Deposit'].sum() if not gl_review.empty else 0
         
         # --- DUPLICATE CALCULATIONS FOR SUMMARY ---
-        total_duplicate_gl_dep = gl_review[gl_review['is_duplicate']]['Deposit'].sum()
+        total_duplicate_gl_dep = gl_review[gl_review['is_duplicate']]['Deposit'].sum() if not gl_review.empty else 0
         total_duplicate_nibss_remitted = nibss_review[nibss_review['is_duplicate']]['remitted_amount'].sum() if not nibss_review.empty else 0
 
         bridging_diff = total_matched_gl_dep - total_matched_gl_nibss
@@ -245,7 +251,9 @@ if st.button("🚀 Run Reconciliation"):
         
         is_m = (nibss_review['Kachasi_ref'] != "") & (~nibss_review['is_duplicate']) if 'Kachasi_ref' in nibss_review.columns else pd.Series([False]*len(nibss_review))
         mda_check_col = nibss_review['mda_name'] if 'mda_name' in nibss_review.columns else pd.Series([""]*len(nibss_review))
-        is_c = ((nibss_review['Kachasi_ref'] == "") & (mda_check_col == 'NIGERIA CUSTOM SERVICES') & (nibss_review['unique_reference'].str.startswith('F', na=False)) & (~nibss_review['is_duplicate']))
+        unique_ref_col = nibss_review['unique_reference'] if 'unique_reference' in nibss_review.columns else pd.Series([""]*len(nibss_review))
+        
+        is_c = ((~is_m) & (mda_check_col == 'NIGERIA CUSTOM SERVICES') & (unique_ref_col.astype(str).str.startswith('F', na=False)) & (~nibss_review['is_duplicate']))
         
         unmatched_csv_customs = nibss_review[is_c]['remitted_amount'].sum() if not nibss_review.empty else 0
         unmatched_csv_others = nibss_review[~is_m & ~is_c & (~nibss_review['is_duplicate'])]['remitted_amount'].sum() if not nibss_review.empty else 0
@@ -255,7 +263,7 @@ if st.button("🚀 Run Reconciliation"):
         
         v1, v2 = st.columns([1, 1.5])
         with v1:
-            if 'mda_name' in df_csv_input.columns:
+            if 'mda_name' in df_csv_input.columns and not df_csv_input.empty:
                 mda_share = df_csv_input.groupby('mda_name')['remitted_amount'].sum().reset_index()
                 mda_share = mda_share[mda_share['remitted_amount'] > 0]
                 if not mda_share.empty:
@@ -265,9 +273,13 @@ if st.button("🚀 Run Reconciliation"):
 
         with v2:
             m1, m2, m3 = st.columns(3)
-            m1.metric("Overall GL Deposit", f"₦{gl_review['Deposit'].sum():,.2f}")
-            m2.metric("Overall NIBSS Remittance", f"₦{df_csv_input['remitted_amount'].sum():,.2f}")
-            m3.metric("Net System Variance", f"₦{gl_review['Variance'].sum():,.2f}")
+            gl_dep_tot = gl_review['Deposit'].sum() if not gl_review.empty else 0
+            csv_rem_tot = df_csv_input['remitted_amount'].sum() if not df_csv_input.empty else 0
+            gl_var_tot = gl_review['Variance'].sum() if not gl_review.empty else 0
+            
+            m1.metric("Overall GL Deposit", f"₦{gl_dep_tot:,.2f}")
+            m2.metric("Overall NIBSS Remittance", f"₦{csv_rem_tot:,.2f}")
+            m3.metric("Net System Variance", f"₦{gl_var_tot:,.2f}")
 
         st.markdown("### Detailed Reconciliation Breakdown")
         d1, d2, d3 = st.columns(3)
@@ -312,15 +324,15 @@ if st.button("🚀 Run Reconciliation"):
             # --- CALCULATE MDA TOTALS FOR SUMMARY (DYNAMIC) ---
             mda_summary_rows = [['--- MDA SPECIFIC TOTALS ---', 'VALUE']]
             for mda_target in selected_mdas:
-                mda_val = df_csv_input[df_csv_input['mda_name'] == mda_target]['remitted_amount'].sum() if not df_csv_input.empty else 0
+                mda_val = df_csv_input[df_csv_input['mda_name'] == mda_target]['remitted_amount'].sum() if ('mda_name' in df_csv_input.columns and not df_csv_input.empty) else 0
                 mda_summary_rows.append([f'Total {mda_target}', mda_val])
 
             summary_sections = [
                 ['EXECUTIVE RECONCILIATION DASHBOARD', ''],
                 ['Run Timestamp', run_time],
-                ['Overall GL Deposit', gl_review['Deposit'].sum()],
-                ['Overall NIBSS Remittance', df_csv_input['remitted_amount'].sum()],
-                ['Net System Variance', gl_review['Variance'].sum()],
+                ['Overall GL Deposit', gl_dep_tot],
+                ['Overall NIBSS Remittance', csv_rem_tot],
+                ['Net System Variance', gl_var_tot],
                 ['', ''],
                 ['--- EXCEL TO CSV ANALYSIS (Bridging) ---', 'VALUE'],
                 ['Total Matched Excel Deposit', total_matched_gl_dep],
@@ -328,7 +340,7 @@ if st.button("🚀 Run Reconciliation"):
                 ['Difference (Matched Excel vs NIBSS)', bridging_diff],
                 ['Total Unmatched Excel Deposit (Exceptions)', unmatched_gl_dep],
                 ['Total Duplicate Excel Deposit (Excluded from Match)', total_duplicate_gl_dep],
-                ['Matched Item Count', matched_mask_gl.sum()],
+                ['Matched Item Count', int(matched_mask_gl.sum()) if not gl_review.empty else 0],
                 ['', '']
             ] + mda_summary_rows + [
                 ['', ''],
@@ -348,43 +360,59 @@ if st.button("🚀 Run Reconciliation"):
             for i, row in enumerate(summary_sections, 1):
                 ws_sum[f'A{i}'].border = ws_sum[f'B{i}'].border = THIN_BORDER
                 if i == 1 or '---' in str(row[0]):
-                    ws_sum[f'A{i}'].fill = NAVY_FILL; ws_sum[f'A{i}'].font = WHITE_TEXT; ws_sum[f'B{i}'].fill = NAVY_FILL
+                    ws_sum[f'A{i}'].fill = NAVY_FILL
+                    ws_sum[f'A{i}'].font = WHITE_TEXT
+                    ws_sum[f'B{i}'].fill = NAVY_FILL
                 if 'Difference' in str(row[0]):
-                    ws_sum[f'A{i}'].font = RED_BOLD; ws_sum[f'B{i}'].font = RED_BOLD
-                if isinstance(row[1], (int, float)): ws_sum[f'B{i}'].number_format = '#,##0.00'
+                    ws_sum[f'A{i}'].font = RED_BOLD
+                    ws_sum[f'B{i}'].font = RED_BOLD
+                if isinstance(row[1], (int, float)): 
+                    ws_sum[f'B{i}'].number_format = '#,##0.00'
 
             def write_block(ws, df, start_row, label, sum_cols):
-                if df.empty: return start_row
+                if df.empty: 
+                    return start_row
                 export_df = df.drop(columns=['is_duplicate'], errors='ignore')
                 df_clean = export_df.fillna('')
                 df_clean.to_excel(writer, sheet_name=ws.title, startrow=start_row, index=False)
+                
                 h_row = start_row + 1 
                 for r in range(h_row, h_row + len(df_clean) + 1):
                     for c in range(1, len(df_clean.columns) + 1):
                         cell = ws.cell(row=r, column=c)
                         cell.border = THIN_BORDER
                         if r == h_row:
-                            cell.fill = NAVY_FILL; cell.font = WHITE_TEXT; cell.alignment = Alignment(horizontal='center')
+                            cell.fill = NAVY_FILL
+                            cell.font = WHITE_TEXT
+                            cell.alignment = Alignment(horizontal='center')
                         else:
-                            if r % 2 == 0: cell.fill = GREY_FILL
+                            if r % 2 == 0: 
+                                cell.fill = GREY_FILL
                             col_name = str(df_clean.columns[c-1]).lower()
                             if any(x in col_name for x in ['amount', 'fee', 'deposit', 'withdrawal', 'variance', 'remitted', 'in_gl']):
-                                cell.number_format = '#,##0.00'; cell.alignment = Alignment(horizontal='right')
+                                cell.number_format = '#,##0.00'
+                                cell.alignment = Alignment(horizontal='right')
+                                
                 t_row = h_row + len(df_clean) + 1
                 ws.cell(row=t_row, column=2, value=f"SUB-TOTAL: {label}").font = BLACK_BOLD
                 for i, col in enumerate(df_clean.columns, 1):
                     if col in sum_cols:
                         cell = ws.cell(row=t_row, column=i, value=df[col].sum())
-                        cell.font = BLACK_BOLD; cell.number_format = '#,##0.00'
+                        cell.font = BLACK_BOLD
+                        cell.number_format = '#,##0.00'
                 return t_row + 2
 
             def write_grand_total(ws, df, row, label, sum_cols):
+                if df.empty:
+                    return row
                 ws.cell(row=row, column=2, value=label).font = RED_BOLD
                 export_df = df.drop(columns=['is_duplicate'], errors='ignore')
                 for i, col in enumerate(export_df.columns, 1):
                     if col in sum_cols:
                         cell = ws.cell(row=row, column=i, value=df[col].sum())
-                        cell.font = BLACK_BOLD; cell.border = DOUBLE_BORDER; cell.number_format = '#,##0.00'
+                        cell.font = BLACK_BOLD
+                        cell.border = DOUBLE_BORDER
+                        cell.number_format = '#,##0.00'
                 return row + 2
 
             # --- GL REVIEW SHEET GENERATION ---
@@ -414,7 +442,7 @@ if st.button("🚀 Run Reconciliation"):
                 ptr, pool = 0, []
                 for fn, df_f in csv_dict.items():
                     if 'mda_name' in df_f.columns and 'unique_reference' in df_f.columns:
-                        cond = (df_f['mda_name'] == mda_target) & (df_f['unique_reference'].str.startswith('F', na=False))
+                        cond = (df_f['mda_name'] == mda_target) & (df_f['unique_reference'].astype(str).str.startswith('F', na=False))
                         ext = df_f[cond]
                         if not ext.empty:
                             ws_ex.cell(row=ptr+1, column=1, value=f"FILE: {fn}").font = BLACK_BOLD
@@ -429,12 +457,15 @@ if st.button("🚀 Run Reconciliation"):
             # --- AUDIT LOG ---
             ws_log = writer.book.create_sheet('Run_Log')
             log_data = [['RECONCILIATION AUDIT LOG', ''], ['Processed At:', run_time], ['', ''], ['SOURCE FILES USED:', 'TYPE']]
-            for f in gl_uploads: log_data.append([f.name, 'EXCEL / GL'])
-            for f in csv_uploads: log_data.append([f.name, 'CSV / NIBSS'])
+            for f in gl_uploads: 
+                log_data.append([f.name, 'EXCEL / GL'])
+            for f in csv_uploads: 
+                log_data.append([f.name, 'CSV / NIBSS'])
             pd.DataFrame(log_data).to_excel(writer, sheet_name='Run_Log', index=False, header=False)
 
             for sheet in writer.book.worksheets:
-                for col in sheet.columns: sheet.column_dimensions[col[0].column_letter].width = 28
+                for col in sheet.columns: 
+                    sheet.column_dimensions[col[0].column_letter].width = 28
 
         st.download_button(label="📥 Download Executive Report", data=output.getvalue(), file_name="Executive_Recon_Report.xlsx")
     else:
