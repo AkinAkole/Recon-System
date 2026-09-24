@@ -18,7 +18,6 @@ def check_password():
     if st.session_state.get("password_correct", False):
         return True
 
-    # Show login form if not authenticated
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.title("🔒 DOD Secure Access")
@@ -31,9 +30,8 @@ def check_password():
                 st.error("🚫 Access Denied: Incorrect Password")
     return False
 
-# Enforce authentication gate immediately
 if not check_password():
-    st.stop()  # Prevents rendering a blank page when unauthenticated
+    st.stop()
 
 # --- CALLBACKS ---
 def clear_search_callback():
@@ -203,7 +201,6 @@ if st.button("🚀 Run Reconciliation"):
             cols.insert(2, cols.pop(cols.index('GL_Reference')))
             gl_review = gl_review[cols]
 
-        # --- DUPLICATE HANDLER & SOURCE FILE TRACKING ---
         nibss_review = df_csv_input.copy() if not df_csv_input.empty else pd.DataFrame(columns=['unique_reference', 'remitted_amount', 'bank_id', 'source_file'])
         
         if not nibss_review.empty and 'unique_reference' in nibss_review.columns:
@@ -228,7 +225,6 @@ if st.button("🚀 Run Reconciliation"):
         gl_review['Source_File'] = gl_review['Reference'].map(csv_source_map).fillna("")
         gl_review['Variance'] = gl_review['NIBSS_remitted'] - gl_review['Deposit']
 
-        # --- MULTIPLE REFERENCE NETTING LOGIC ---
         gl_match_map = single_gl[single_gl['Reference'] != ""].groupby('Reference')['Deposit'].sum().to_dict() if not single_gl.empty else {}
 
         if not nibss_review.empty:
@@ -242,7 +238,6 @@ if st.button("🚀 Run Reconciliation"):
         total_matched_gl_nibss = gl_review[matched_mask_gl]['NIBSS_remitted'].sum() if not gl_review.empty else 0
         unmatched_gl_dep = gl_review[~matched_mask_gl & (~gl_review['is_duplicate']) & (gl_review['Deposit'] > 0)]['Deposit'].sum() if not gl_review.empty else 0
         
-        # --- DUPLICATE CALCULATIONS FOR SUMMARY ---
         total_duplicate_gl_dep = gl_review[gl_review['is_duplicate']]['Deposit'].sum() if not gl_review.empty else 0
         total_duplicate_nibss_remitted = nibss_review[nibss_review['is_duplicate']]['remitted_amount'].sum() if not nibss_review.empty else 0
 
@@ -318,10 +313,11 @@ if st.button("🚀 Run Reconciliation"):
             st.write("**Unmatched CSV Categorization**")
             st.table(pd.DataFrame({"Description": ["Customs (NCS)", "Other MDAs", "Total Unmatched CSV"], "Value": [unmatched_csv_customs, unmatched_csv_others, unmatched_csv_customs + unmatched_csv_others]}).set_index("Description").style.format("₦{:,.2f}"))
 
+        # --- EXCEL GENERATION ENGINE ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             
-            # --- CALCULATE MDA TOTALS FOR SUMMARY (DYNAMIC) ---
+            # 1. SUMMARY SHEET
             mda_summary_rows = [['--- MDA SPECIFIC TOTALS ---', 'VALUE']]
             for mda_target in selected_mdas:
                 mda_val = df_csv_input[df_csv_input['mda_name'] == mda_target]['remitted_amount'].sum() if ('mda_name' in df_csv_input.columns and not df_csv_input.empty) else 0
@@ -369,76 +365,99 @@ if st.button("🚀 Run Reconciliation"):
                 if isinstance(row[1], (int, float)): 
                     ws_sum[f'B{i}'].number_format = '#,##0.00'
 
+            # 2. SAFE BLOCK-WRITING FUNCTION
             def write_block(ws, df, start_row, label, sum_cols):
                 if df.empty: 
                     return start_row
-                export_df = df.drop(columns=['is_duplicate'], errors='ignore')
-                df_clean = export_df.fillna('')
-                df_clean.to_excel(writer, sheet_name=ws.title, startrow=start_row, index=False)
                 
-                h_row = start_row + 1 
-                for r in range(h_row, h_row + len(df_clean) + 1):
-                    for c in range(1, len(df_clean.columns) + 1):
-                        cell = ws.cell(row=r, column=c)
+                export_df = df.drop(columns=['is_duplicate'], errors='ignore').fillna('')
+                export_df.to_excel(writer, sheet_name=ws.title, startrow=start_row, index=False)
+                
+                header_row = start_row + 1
+                data_start_row = header_row + 1
+                data_end_row = header_row + len(export_df)
+                
+                # Format Header
+                for col_idx in range(1, len(export_df.columns) + 1):
+                    cell = ws.cell(row=header_row, column=col_idx)
+                    cell.fill = NAVY_FILL
+                    cell.font = WHITE_TEXT
+                    cell.alignment = Alignment(horizontal='center')
+                    cell.border = THIN_BORDER
+
+                # Format Data Rows
+                for row_idx in range(data_start_row, data_end_row + 1):
+                    is_even = (row_idx % 2 == 0)
+                    for col_idx in range(1, len(export_df.columns) + 1):
+                        cell = ws.cell(row=row_idx, column=col_idx)
                         cell.border = THIN_BORDER
-                        if r == h_row:
-                            cell.fill = NAVY_FILL
-                            cell.font = WHITE_TEXT
-                            cell.alignment = Alignment(horizontal='center')
-                        else:
-                            if r % 2 == 0: 
-                                cell.fill = GREY_FILL
-                            col_name = str(df_clean.columns[c-1]).lower()
-                            if any(x in col_name for x in ['amount', 'fee', 'deposit', 'withdrawal', 'variance', 'remitted', 'in_gl']):
-                                cell.number_format = '#,##0.00'
-                                cell.alignment = Alignment(horizontal='right')
-                                
-                t_row = h_row + len(df_clean) + 1
-                ws.cell(row=t_row, column=2, value=f"SUB-TOTAL: {label}").font = BLACK_BOLD
-                for i, col in enumerate(df_clean.columns, 1):
-                    if col in sum_cols:
-                        cell = ws.cell(row=t_row, column=i, value=df[col].sum())
+                        if is_even:
+                            cell.fill = GREY_FILL
+                        
+                        col_name = str(export_df.columns[col_idx - 1]).lower()
+                        if any(x in col_name for x in ['amount', 'fee', 'deposit', 'withdrawal', 'variance', 'remitted', 'in_gl']):
+                            cell.number_format = '#,##0.00'
+                            cell.alignment = Alignment(horizontal='right')
+
+                # Format Subtotal Row
+                subtotal_row = data_end_row + 1
+                ws.cell(row=subtotal_row, column=1, value=f"SUB-TOTAL: {label}").font = BLACK_BOLD
+                ws.cell(row=subtotal_row, column=1).border = THIN_BORDER
+
+                for col_idx, col_name in enumerate(export_df.columns, 1):
+                    cell = ws.cell(row=subtotal_row, column=col_idx)
+                    cell.border = THIN_BORDER
+                    if col_name in sum_cols:
+                        cell.value = df[col_name].sum()
                         cell.font = BLACK_BOLD
                         cell.number_format = '#,##0.00'
-                return t_row + 2
+
+                return subtotal_row + 2
 
             def write_grand_total(ws, df, row, label, sum_cols):
                 if df.empty:
                     return row
-                ws.cell(row=row, column=2, value=label).font = RED_BOLD
+                
                 export_df = df.drop(columns=['is_duplicate'], errors='ignore')
-                for i, col in enumerate(export_df.columns, 1):
-                    if col in sum_cols:
-                        cell = ws.cell(row=row, column=i, value=df[col].sum())
+                ws.cell(row=row, column=1, value=label).font = RED_BOLD
+                ws.cell(row=row, column=1).border = DOUBLE_BORDER
+                
+                for col_idx, col_name in enumerate(export_df.columns, 1):
+                    cell = ws.cell(row=row, column=col_idx)
+                    cell.border = DOUBLE_BORDER
+                    if col_name in sum_cols:
+                        cell.value = df[col_name].sum()
                         cell.font = BLACK_BOLD
-                        cell.border = DOUBLE_BORDER
                         cell.number_format = '#,##0.00'
+
                 return row + 2
 
-            # --- GL REVIEW SHEET GENERATION ---
+            # 3. GL REVIEW SHEET
             ws_gl = writer.book.create_sheet('GL_Review')
             gl_sums = ['Deposit', 'Withdrawal', 'NIBSS_remitted', 'Variance']
             
             r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] != "") & (~gl_review['is_duplicate'])], 0, "MATCHED GL", gl_sums)
             r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Deposit'] > 0) & (~gl_review['is_duplicate'])], r, "UNMATCHED DEPOSIT", gl_sums)
             r = write_block(ws_gl, gl_review[(gl_review['NIBSS_reference'] == "") & (gl_review['Withdrawal'] > 0) & (~gl_review['is_duplicate'])], r, "UNMATCHED WITHDRAWAL", gl_sums)
-            r = write_block(ws_gl, gl_review[gl_review['is_duplicate']], r, "DUPLICATE GL REFERENCES (EXCLUDED FROM MATCH)", gl_sums)
+            r = write_block(ws_gl, gl_review[gl_review['is_duplicate']], r, "DUPLICATE GL REFERENCES (EXCLUDED)", gl_sums)
             write_grand_total(ws_gl, gl_review, r, "GRAND TOTAL (GL_REVIEW)", gl_sums)
 
-            # --- NIBSS REVIEW SHEET GENERATION ---
+            # 4. NIBSS REVIEW SHEET
             ws_nr = writer.book.create_sheet('NIBSS_Review')
             nr_sums = ['remitted_amount', 'collected_amount', 'fee', 'Kachasi_In_GL', 'Settle_Variance']
             
             r_n = write_block(ws_nr, nibss_review[is_m], 0, "MATCHED NIBSS", nr_sums)
             r_n = write_block(ws_nr, nibss_review[is_c], r_n, "UNMATCHED CUSTOMS (F-REF)", nr_sums)
             r_n = write_block(ws_nr, nibss_review[(~is_m) & (~is_c) & (~nibss_review['is_duplicate'])], r_n, "OTHER UNMATCHED", nr_sums)
-            r_n = write_block(ws_nr, nibss_review[nibss_review['is_duplicate']], r_n, "DUPLICATE NIBSS REFERENCES (EXCLUDED FROM MATCH)", nr_sums)
+            r_n = write_block(ws_nr, nibss_review[nibss_review['is_duplicate']], r_n, "DUPLICATE NIBSS REFERENCES (EXCLUDED)", nr_sums)
             write_grand_total(ws_nr, nibss_review, r_n, "GRAND TOTAL (NIBSS_REVIEW)", nr_sums)
 
-            # --- DYNAMIC MDA EXTRACTION SHEETS ---
+            # 5. DYNAMIC MDA EXTRACTION SHEETS (SAFE NAMES)
             for mda_target in selected_mdas:
-                sname = re.sub(r'[\/*?:\[\]]', '', mda_target)[:25].strip() + "_Extract"
+                safe_mda_name = re.sub(r'[\/*?:\[\]]', '', str(mda_target)).strip()[:20]
+                sname = f"{safe_mda_name}_Extract"
                 ws_ex = writer.book.create_sheet(sname)
+                
                 ptr, pool = 0, []
                 for fn, df_f in csv_dict.items():
                     if 'mda_name' in df_f.columns and 'unique_reference' in df_f.columns:
@@ -454,7 +473,7 @@ if st.button("🚀 Run Reconciliation"):
                 else: 
                     write_grand_total(ws_ex, pd.concat(pool), ptr, f"GRAND TOTAL ({sname})", ['remitted_amount', 'collected_amount', 'fee'])
 
-            # --- AUDIT LOG ---
+            # 6. AUDIT LOG SHEET
             ws_log = writer.book.create_sheet('Run_Log')
             log_data = [['RECONCILIATION AUDIT LOG', ''], ['Processed At:', run_time], ['', ''], ['SOURCE FILES USED:', 'TYPE']]
             for f in gl_uploads: 
@@ -463,6 +482,7 @@ if st.button("🚀 Run Reconciliation"):
                 log_data.append([f.name, 'CSV / NIBSS'])
             pd.DataFrame(log_data).to_excel(writer, sheet_name='Run_Log', index=False, header=False)
 
+            # Auto-fit Column Widths across all sheets
             for sheet in writer.book.worksheets:
                 for col in sheet.columns: 
                     sheet.column_dimensions[col[0].column_letter].width = 28
